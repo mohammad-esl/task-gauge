@@ -12,10 +12,12 @@ class TimerApi:
         # Default data
         self.data = {
             "categories": ["Nothing", "Education", "Work", "Study", "Project 1"],
-            "totals": {"Nothing": 0, "Education": 0, "Work": 0, "Study": 0, "Project 1": 0}
+            "totals": {"Nothing": 0, "Education": 0, "Work": 0, "Study": 0, "Project 1": 0},
+            "last_date": datetime.now().strftime("%Y-%m-%d")
         }
         
         self.load_config()
+        self._check_daily_reset()
         
         # Force "Nothing" to exist
         if "Nothing" not in self.data["categories"]:
@@ -33,9 +35,25 @@ class TimerApi:
                     self.data = json.load(f)
             except: pass
 
+        if "last_date" not in self.data:
+            self.data["last_date"] = datetime.now().strftime("%Y-%m-%d")
+
     def save_config(self):
         with open(self.config_file, "w") as f:
             json.dump(self.data, f)
+
+    def _check_daily_reset(self):
+        today = datetime.now().date()
+        last = datetime.strptime(self.data["last_date"], "%Y-%m-%d").date()
+
+        if today != last:
+            self.data["totals"] = {k: 0 for k in self.data["categories"]}
+            self.data["last_date"] = today.strftime("%Y-%m-%d")
+
+            with open(self.log_file, "a") as f:
+                f.write(f"\n--- NEW DAY: {self.data['last_date']} ---\n")
+
+            self.save_config()
 
     def _get_hms(self, s):
         return s // 3600, (s % 3600) // 60, s % 60
@@ -63,6 +81,8 @@ class TimerApi:
         return {"categories": self.data["categories"], "active": self.active_cat, "history": history_list}
 
     def set_category(self, name):
+        self._check_daily_reset()
+
         now = time.time()
         duration = int(now - self.start_time)
         
@@ -95,6 +115,8 @@ class TimerApi:
         return self.get_init_data()
 
     def get_status(self):
+        self._check_daily_reset()
+
         now = time.time()
         session = int(now - self.start_time)
         return {
