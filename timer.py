@@ -42,11 +42,41 @@ class TimerApi:
         with open(self.config_file, "w") as f:
             json.dump(self.data, f)
 
+    def _save_daily_report(self, date_str):
+        report_file = "daily_report.json"
+
+        reports = {}
+        if os.path.exists(report_file):
+            try:
+                with open(report_file, "r") as f:
+                    reports = json.load(f)
+            except:
+                reports = {}
+
+        reports[date_str] = self.data["totals"].copy()
+
+        with open(report_file, "w") as f:
+            json.dump(reports, f, indent=4)
+
+    def get_today_report(self):
+        self._check_daily_reset()
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "totals": self.data["totals"]
+        }
+
+    def save_today_report(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        self._save_daily_report(today)
+        return {"status": "saved"}
+
     def _check_daily_reset(self):
         today = datetime.now().date()
         last = datetime.strptime(self.data["last_date"], "%Y-%m-%d").date()
 
         if today != last:
+            self._save_daily_report(self.data["last_date"])
+
             self.data["totals"] = {k: 0 for k in self.data["categories"]}
             self.data["last_date"] = today.strftime("%Y-%m-%d")
 
