@@ -2,12 +2,16 @@ import webview
 import time
 import os
 import json
+import csv
 from datetime import datetime
 
 class TimerApi:
     def __init__(self):
         self.log_file = "timer_history.txt"
         self.config_file = "config.json"
+        self.report_file = "daily_report.csv"
+        self.last_report_save = time.time()
+        self.report_save_interval = 300  # 5 minutes
         
         # Default data
         self.data = {
@@ -42,27 +46,53 @@ class TimerApi:
         with open(self.config_file, "w") as f:
             json.dump(self.data, f)
 
+    def _get_live_totals(self):
+        totals = self.data["totals"].copy()
+
+        if hasattr(self, "active_cat") and hasattr(self, "start_time"):
+            session = int(time.time() - self.start_time)
+            totals[self.active_cat] = totals.get(self.active_cat, 0) + session
+
+        return totals
+
+    def _format_hms(self, seconds):
+        h, m, s = self._get_hms(seconds)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
     def _save_daily_report(self, date_str):
-        report_file = "daily_report.json"
+        totals = self._get_live_totals()
+        rows = []
+        fieldnames = ["date"] + self.data["categories"]
 
-        reports = {}
-        if os.path.exists(report_file):
-            try:
-                with open(report_file, "r") as f:
-                    reports = json.load(f)
-            except:
-                reports = {}
+        if os.path.exists(self.report_file):
+            with open(self.report_file, "r", newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
 
-        reports[date_str] = self.data["totals"].copy()
+                for field in reader.fieldnames or []:
+                    if field not in fieldnames:
+                        fieldnames.append(field)
 
-        with open(report_file, "w") as f:
-            json.dump(reports, f, indent=4)
+        existing = {row["date"]: row for row in rows if "date" in row}
+
+        row = {"date": date_str}
+        for cat in fieldnames:
+            if cat == "date":
+                continue
+            row[cat] = self._format_hms(totals.get(cat, 0))
+
+        existing[date_str] = row
+
+        with open(self.report_file, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(existing.values())
 
     def get_today_report(self):
         self._check_daily_reset()
         return {
             "date": datetime.now().strftime("%Y-%m-%d"),
-            "totals": self.data["totals"]
+            "totals": self._get_live_totals()
         }
 
     def save_today_report(self):
@@ -123,6 +153,10 @@ class TimerApi:
         
         self.active_cat = name
         self.start_time = now
+
+        self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+        self.last_report_save = time.time()
+
         return {"status": "success"}
 
     def reset_timer(self):
@@ -142,10 +176,15 @@ class TimerApi:
         self.active_cat = "Nothing"
         self.start_time = time.time()
         self.save_config()
+        self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
         return self.get_init_data()
 
     def get_status(self):
         self._check_daily_reset()
+
+        if time.time() - self.last_report_save >= self.report_save_interval:
+            self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+            self.last_report_save = time.time()
 
         now = time.time()
         session = int(now - self.start_time)
