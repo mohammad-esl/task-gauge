@@ -3,7 +3,7 @@ import time
 import os
 import json
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class TimerApi:
     def __init__(self):
@@ -99,6 +99,49 @@ class TimerApi:
         today = datetime.now().strftime("%Y-%m-%d")
         self._save_daily_report(today)
         return {"status": "saved"}
+
+    def get_week_report(self, week_offset=0):
+        self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+
+        today = datetime.now().date()
+        start_of_week = today - timedelta(days=today.weekday())
+        start_of_week = start_of_week + timedelta(weeks=int(week_offset))
+        end_of_week = start_of_week + timedelta(days=6)
+
+        rows = {}
+        if os.path.exists(self.report_file):
+            with open(self.report_file, "r", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    rows[row["date"]] = row
+
+        days = []
+        for i in range(7):
+            day = start_of_week + timedelta(days=i)
+            date_str = day.strftime("%Y-%m-%d")
+            row = rows.get(date_str, {})
+
+            totals = {}
+            for cat in self.data["categories"]:
+                value = row.get(cat, "00:00:00")
+                try:
+                    h, m, s = [int(x) for x in value.split(":")]
+                    totals[cat] = h * 3600 + m * 60 + s
+                except:
+                    totals[cat] = 0
+
+            days.append({
+                "date": date_str,
+                "label": day.strftime("%a"),
+                "totals": totals
+            })
+
+        return {
+            "week_start": start_of_week.strftime("%Y-%m-%d"),
+            "week_end": end_of_week.strftime("%Y-%m-%d"),
+            "categories": self.data["categories"],
+            "days": days
+        }
 
     def _check_daily_reset(self):
         today = datetime.now().date()
@@ -217,18 +260,37 @@ html_content = """
         .controls { margin-top: 15px; display: flex; gap: 8px; }
         .icon-btn { background: none; border: 1px solid #333; color: #555; cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
         .icon-btn:hover { color: white; border-color: #777; }
-        #settings-panel { position: absolute; width: 340px; background: rgba(15,15,15,0.98); border: 1px solid #333; padding: 20px; border-radius: 15px; z-index: 100; display: none; box-shadow: 0 0 50px black; max-height: 90vh; overflow-y: auto; }
+        #settings-panel { position: absolute; width: 380px; background: rgba(15,15,15,0.98); border: 1px solid #333; padding: 20px; border-radius: 15px; z-index: 100; display: none; box-shadow: 0 0 50px black; max-height: 90vh; overflow-y: auto; }
         textarea { width: 100%; height: 80px; background: #000; color: var(--accent); border: 1px solid #444; padding: 8px; box-sizing: border-box; margin-bottom: 15px; }
         .stats-table { width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 15px; color: #aaa; }
         .stats-table td { padding: 4px 0; border-bottom: 1px solid #222; }
         .stats-table tr td:last-child { text-align: right; color: var(--accent); }
         .save-btn { background: var(--accent); color: black; border: none; padding: 10px; width: 100%; cursor: pointer; font-weight: bold; border-radius: 4px; margin-top: 5px; }
+        #week-chart { height: 180px; display: flex; align-items: flex-end; gap: 8px; border-bottom: 1px solid #333; padding-bottom: 8px; margin-bottom: 12px; }
+        .bar-wrapper { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+        .bar { width: 100%; display: flex; flex-direction: column-reverse; background: #111; border: 1px solid #222; box-sizing: border-box; }
+        .bar-label { font-size: 10px; color: #777; margin-top: 4px; }
+        .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; font-size: 10px; color: #aaa; }
+        .legend-item { display: flex; align-items: center; gap: 4px; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
     </style>
 </head>
 <body>
     <div id="settings-panel">
         <h4 style="margin:0 0 10px 0; color:var(--accent); letter-spacing:1px">DASHBOARD</h4>
         <table class="stats-table" id="history-table"></table>
+
+        <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">WEEKLY VIEW</h5>
+        <div style="display:flex; gap:6px; margin-bottom:10px;">
+            <button class="icon-btn" onclick="changeWeek(-1)">← PREV</button>
+            <button class="icon-btn" onclick="changeWeek(0)">THIS WEEK</button>
+            <button class="icon-btn" onclick="changeWeek(1)">NEXT →</button>
+        </div>
+
+        <div id="week-label" style="font-size:11px; color:#777; margin-bottom:8px;"></div>
+        <div id="week-chart"></div>
+        <div id="week-legend" class="legend"></div>
+
         <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">EDIT TASKS (One per line)</h5>
         <textarea id="cat-input" placeholder="Enter tasks..."></textarea>
         <button class="save-btn" onclick="saveSettings()">APPLY CHANGES</button>
@@ -250,14 +312,101 @@ html_content = """
 
     <script>
         let cats = [];
+        let currentWeekOffset = 0;
         const hub = document.getElementById('hub');
         const svg = document.getElementById('hit-surface');
+
+        const chartColors = [
+            "#00e5ff", "#ff4b2b", "#ffd166", "#06d6a0", "#9b5de5",
+            "#f15bb5", "#fee440", "#00bbf9", "#f77f00", "#80ed99"
+        ];
         
         function format(s, full=false) {
             let h = Math.floor(s / 3600).toString().padStart(2, '0');
             let m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
             let sec = (s % 60).toString().padStart(2, '0');
             return full ? `${h}:${m}:${sec}` : `${m}:${sec}`;
+        }
+
+        function secondsToLabel(s) {
+            let h = Math.floor(s / 3600);
+            let m = Math.floor((s % 3600) / 60);
+            return `${h}h ${m}m`;
+        }
+
+        function changeWeek(direction) {
+            if (direction === 0) {
+                currentWeekOffset = 0;
+            } else {
+                currentWeekOffset += direction;
+            }
+            loadWeekChart();
+        }
+
+        function loadWeekChart() {
+            window.pywebview.api.get_week_report(currentWeekOffset).then(data => {
+                document.getElementById("week-label").innerText =
+                    `${data.week_start} → ${data.week_end}`;
+
+                const chart = document.getElementById("week-chart");
+                const legend = document.getElementById("week-legend");
+                chart.innerHTML = "";
+                legend.innerHTML = "";
+
+                data.categories.forEach((cat, i) => {
+                    const item = document.createElement("div");
+                    item.className = "legend-item";
+
+                    const dot = document.createElement("div");
+                    dot.className = "legend-dot";
+                    dot.style.background = chartColors[i % chartColors.length];
+
+                    const text = document.createElement("span");
+                    text.innerText = cat;
+
+                    item.appendChild(dot);
+                    item.appendChild(text);
+                    legend.appendChild(item);
+                });
+
+                const maxDayTotal = Math.max(
+                    1,
+                    ...data.days.map(day =>
+                        Object.values(day.totals).reduce((a, b) => a + b, 0)
+                    )
+                );
+
+                data.days.forEach(day => {
+                    const dayTotal = Object.values(day.totals).reduce((a, b) => a + b, 0);
+
+                    const wrapper = document.createElement("div");
+                    wrapper.className = "bar-wrapper";
+
+                    const bar = document.createElement("div");
+                    bar.className = "bar";
+                    bar.style.height = `${Math.max(4, (dayTotal / maxDayTotal) * 150)}px`;
+                    bar.title = `${day.date} — ${secondsToLabel(dayTotal)}`;
+
+                    data.categories.forEach((cat, i) => {
+                        const seconds = day.totals[cat] || 0;
+                        if (seconds <= 0 || dayTotal <= 0) return;
+
+                        const segment = document.createElement("div");
+                        segment.style.height = `${(seconds / dayTotal) * 100}%`;
+                        segment.style.background = chartColors[i % chartColors.length];
+                        segment.title = `${cat}: ${secondsToLabel(seconds)}`;
+                        bar.appendChild(segment);
+                    });
+
+                    const label = document.createElement("div");
+                    label.className = "bar-label";
+                    label.innerText = day.label;
+
+                    wrapper.appendChild(bar);
+                    wrapper.appendChild(label);
+                    chart.appendChild(wrapper);
+                });
+            });
         }
 
         function toggleSettings() {
@@ -269,6 +418,7 @@ html_content = """
                     const table = document.getElementById('history-table');
                     table.innerHTML = data.history.map(h => `<tr><td>${h.name}</td><td>${h.time}</td></tr>`).join('');
                     document.getElementById('cat-input').value = data.categories.filter(c => c !== "Nothing").join('\\n');
+                    loadWeekChart();
                 });
             }
             panel.style.display = isVisible ? 'none' : 'block';
