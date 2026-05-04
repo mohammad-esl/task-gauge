@@ -334,6 +334,16 @@ html_content = """
             return `${h}h ${m}m`;
         }
 
+        function visibleCategories(categories) {
+            return categories.filter(c => c !== "Nothing");
+        }
+
+        function visibleDayTotal(day) {
+            return Object.entries(day.totals)
+                .filter(([cat]) => cat !== "Nothing")
+                .reduce((sum, [, seconds]) => sum + seconds, 0);
+        }
+
         function changeWeek(direction) {
             if (direction === 0) {
                 currentWeekOffset = 0;
@@ -353,7 +363,9 @@ html_content = """
                 chart.innerHTML = "";
                 legend.innerHTML = "";
 
-                data.categories.forEach((cat, i) => {
+                const chartCategories = visibleCategories(data.categories);
+
+                chartCategories.forEach((cat, i) => {
                     const item = document.createElement("div");
                     item.className = "legend-item";
 
@@ -371,13 +383,11 @@ html_content = """
 
                 const maxDayTotal = Math.max(
                     1,
-                    ...data.days.map(day =>
-                        Object.values(day.totals).reduce((a, b) => a + b, 0)
-                    )
+                    ...data.days.map(day => visibleDayTotal(day))
                 );
 
                 data.days.forEach(day => {
-                    const dayTotal = Object.values(day.totals).reduce((a, b) => a + b, 0);
+                    const dayTotal = visibleDayTotal(day);
 
                     const wrapper = document.createElement("div");
                     wrapper.className = "bar-wrapper";
@@ -387,7 +397,7 @@ html_content = """
                     bar.style.height = `${Math.max(4, (dayTotal / maxDayTotal) * 150)}px`;
                     bar.title = `${day.date} — ${secondsToLabel(dayTotal)}`;
 
-                    data.categories.forEach((cat, i) => {
+                    chartCategories.forEach((cat, i) => {
                         const seconds = day.totals[cat] || 0;
                         if (seconds <= 0 || dayTotal <= 0) return;
 
