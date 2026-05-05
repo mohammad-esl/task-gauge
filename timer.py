@@ -3,6 +3,7 @@ import time
 import os
 import json
 import csv
+import re
 from datetime import datetime, timedelta
 
 
@@ -48,6 +49,79 @@ class TimerApi:
     def save_config(self):
         with open(self.config_file, "w") as f:
             json.dump(self.data, f)
+
+    def _parse_history_duration(self, hours, minutes, seconds):
+        return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+
+    def _load_history_sessions(self):
+        if not os.path.exists(self.log_file):
+            return []
+
+        sessions = []
+        pattern = re.compile(
+            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*\|\s*"
+            r"(?:\[(?:TASK|BREAK)\]\s*)?"
+            r"(.+?)\s*\|\s*Session:\s*"
+            r"(\d+)h\s+(\d+)m\s+(\d+)s"
+        )
+
+        try:
+            with open(self.log_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            return []
+
+        for line in lines:
+            match = pattern.search(line)
+            if not match:
+                continue
+
+            end_text, category, h, m, sec = match.groups()
+            duration = self._parse_history_duration(h, m, sec)
+            if duration < 1:
+                continue
+
+            try:
+                end_dt = datetime.strptime(end_text, "%Y-%m-%d %H:%M")
+            except Exception:
+                continue
+
+            start_dt = end_dt - timedelta(seconds=duration)
+            category = category.strip()
+
+            sessions.append({
+                "date": end_dt.strftime("%Y-%m-%d"),
+                "category": category,
+                "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "duration": duration,
+                "source": "history",
+            })
+
+        return sessions
+
+    def _clip_session_to_day(self, session, date_str):
+        try:
+            start_dt = datetime.strptime(session["start"], "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(session["end"], "%Y-%m-%d %H:%M:%S")
+            day_start = datetime.strptime(date_str, "%Y-%m-%d")
+        except Exception:
+            return None
+
+        day_end = day_start + timedelta(days=1)
+        clipped_start = max(start_dt, day_start)
+        clipped_end = min(end_dt, day_end)
+
+        if clipped_end <= clipped_start:
+            return None
+
+        clipped = session.copy()
+        clipped["date"] = date_str
+        clipped["start"] = clipped_start.strftime("%Y-%m-%d %H:%M:%S")
+        clipped["end"] = clipped_end.strftime("%Y-%m-%d %H:%M:%S")
+        clipped["duration"] = int((clipped_end - clipped_start).total_seconds())
+        return clipped
+
 
     def _load_sessions(self):
         if not os.path.exists(self.sessions_file):
@@ -193,26 +267,45 @@ class TimerApi:
         if not date_str:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
-        sessions = self._load_sessions()
-        filtered = [s for s in sessions if s.get("date") == date_str]
+        # Primary source: timer_history.txt.
+        # Each history row stores the session end time and duration, so we reconstruct:
+        # start_time = end_time - duration.
+        history_sessions = self._load_history_sessions()
+        filtered = []
+
+        for session in history_sessions:
+            clipped = self._clip_session_to_day(session, date_str)
+            if clipped:
+                filtered.append(clipped)
 
         # Add the current live session without saving it yet.
         now = time.time()
         if hasattr(self, "active_cat") and hasattr(self, "start_time"):
             duration = int(now - self.start_time)
-            if duration > 0 and datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d") == date_str:
-                filtered.append({
-                    "date": date_str,
-                    "category": self.active_cat,
-                    "start": datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S"),
-                    "end": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"),
-                    "duration": duration,
-                    "live": True,
-                })
+            live_session = {
+                "date": date_str,
+                "category": self.active_cat,
+                "start": datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S"),
+                "end": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"),
+                "duration": duration,
+                "live": True,
+                "source": "live",
+            }
+            clipped = self._clip_session_to_day(live_session, date_str)
+            if duration > 0 and clipped:
+                filtered.append(clipped)
+
+        categories = list(self.data["categories"])
+        for session in filtered:
+            cat = session.get("category")
+            if cat and cat not in categories:
+                categories.append(cat)
+
+        filtered.sort(key=lambda item: item.get("start", ""))
 
         return {
             "date": date_str,
-            "categories": self.data["categories"],
+            "categories": categories,
             "sessions": filtered,
         }
 
@@ -265,7 +358,6 @@ class TimerApi:
 
         # Always update totals and save
         self.data["totals"][self.active_cat] += duration
-        self._record_session(self.active_cat, self.start_time, now)
         self._write_to_history(self.active_cat, duration)
         self.save_config()
 
@@ -646,7 +738,7 @@ html_content = """
                     block.style.left = `${left}%`;
                     block.style.width = `${width}%`;
                     block.style.background = chartColors[colorIndex % chartColors.length];
-                    block.title = `${cat}\\n${displayTime(s.start)} → ${displayTime(s.end)}\\n${secondsToLabel(s.duration || 0)}${s.live ? ' / live' : ''}`;
+                    block.title = `${cat}\n${displayTime(s.start)} → ${displayTime(s.end)}\n${secondsToLabel(s.duration || 0)}${s.live ? ' / live' : ''}`;
                     lane.appendChild(block);
                 });
 
