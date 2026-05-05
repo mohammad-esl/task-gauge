@@ -5,30 +5,32 @@ import json
 import csv
 from datetime import datetime, timedelta
 
+
 class TimerApi:
     def __init__(self):
         self.log_file = "timer_history.txt"
         self.config_file = "config.json"
         self.report_file = "daily_report.csv"
+        self.sessions_file = "timer_sessions.json"
         self.last_report_save = time.time()
         self.report_save_interval = 300  # 5 minutes
-        
+
         # Default data
         self.data = {
             "categories": ["Nothing", "Education", "Work", "Study", "Project 1"],
             "totals": {"Nothing": 0, "Education": 0, "Work": 0, "Study": 0, "Project 1": 0},
-            "last_date": datetime.now().strftime("%Y-%m-%d")
+            "last_date": datetime.now().strftime("%Y-%m-%d"),
         }
-        
+
         self.load_config()
         self._check_daily_reset()
-        
+
         # Force "Nothing" to exist
         if "Nothing" not in self.data["categories"]:
             self.data["categories"].insert(0, "Nothing")
         if "Nothing" not in self.data["totals"]:
             self.data["totals"]["Nothing"] = 0
-            
+
         self.active_cat = "Nothing"
         self.start_time = time.time()
 
@@ -37,7 +39,8 @@ class TimerApi:
             try:
                 with open(self.config_file, "r") as f:
                     self.data = json.load(f)
-            except: pass
+            except Exception:
+                pass
 
         if "last_date" not in self.data:
             self.data["last_date"] = datetime.now().strftime("%Y-%m-%d")
@@ -45,6 +48,47 @@ class TimerApi:
     def save_config(self):
         with open(self.config_file, "w") as f:
             json.dump(self.data, f)
+
+    def _load_sessions(self):
+        if not os.path.exists(self.sessions_file):
+            return []
+
+        try:
+            with open(self.sessions_file, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+
+        return []
+
+    def _save_sessions(self, sessions):
+        with open(self.sessions_file, "w") as f:
+            json.dump(sessions, f, indent=2)
+
+    def _record_session(self, name, start_ts, end_ts):
+        duration = int(end_ts - start_ts)
+        if duration < 1:
+            return
+
+        start_dt = datetime.fromtimestamp(start_ts)
+        end_dt = datetime.fromtimestamp(end_ts)
+
+        sessions = self._load_sessions()
+        sessions.append({
+            "date": start_dt.strftime("%Y-%m-%d"),
+            "category": name,
+            "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": duration,
+        })
+
+        # Keep the file from growing forever. This preserves roughly the latest 5000 sessions.
+        if len(sessions) > 5000:
+            sessions = sessions[-5000:]
+
+        self._save_sessions(sessions)
 
     def _get_live_totals(self):
         totals = self.data["totals"].copy()
@@ -92,7 +136,7 @@ class TimerApi:
         self._check_daily_reset()
         return {
             "date": datetime.now().strftime("%Y-%m-%d"),
-            "totals": self._get_live_totals()
+            "totals": self._get_live_totals(),
         }
 
     def save_today_report(self):
@@ -127,20 +171,49 @@ class TimerApi:
                 try:
                     h, m, s = [int(x) for x in value.split(":")]
                     totals[cat] = h * 3600 + m * 60 + s
-                except:
+                except Exception:
                     totals[cat] = 0
 
             days.append({
                 "date": date_str,
                 "label": day.strftime("%a"),
-                "totals": totals
+                "totals": totals,
             })
 
         return {
             "week_start": start_of_week.strftime("%Y-%m-%d"),
             "week_end": end_of_week.strftime("%Y-%m-%d"),
             "categories": self.data["categories"],
-            "days": days
+            "days": days,
+        }
+
+    def get_gantt_report(self, date_str=None):
+        self._check_daily_reset()
+
+        if not date_str:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        sessions = self._load_sessions()
+        filtered = [s for s in sessions if s.get("date") == date_str]
+
+        # Add the current live session without saving it yet.
+        now = time.time()
+        if hasattr(self, "active_cat") and hasattr(self, "start_time"):
+            duration = int(now - self.start_time)
+            if duration > 0 and datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d") == date_str:
+                filtered.append({
+                    "date": date_str,
+                    "category": self.active_cat,
+                    "start": datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S"),
+                    "end": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": duration,
+                    "live": True,
+                })
+
+        return {
+            "date": date_str,
+            "categories": self.data["categories"],
+            "sessions": filtered,
         }
 
     def _check_daily_reset(self):
@@ -163,24 +236,25 @@ class TimerApi:
 
     def _write_to_history(self, name, session_duration):
         # We log "Nothing" to history only if it was a significant "break" (> 10 seconds)
-        if session_duration < 10: return 
-        
+        if session_duration < 10:
+            return
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         sh, sm, ss = self._get_hms(session_duration)
         th, tm, ts = self._get_hms(self.data["totals"].get(name, 0))
-        
+
         prefix = "[BREAK]   " if name == "Nothing" else "[TASK]    "
         log_entry = (f"{timestamp} | {prefix} {name.ljust(15)} | "
                      f"Session: {sh}h {sm}m {ss}s | Total: {th}h {tm}m {ts}s\n")
-        
+
         with open(self.log_file, "a") as f:
             f.write(log_entry)
 
     def get_init_data(self):
         # Now "Nothing" is included in the history list for the Dashboard
-        history_list = [{"name": k, "time": f"{h}h {m}m {s}s"} 
-                       for k, v in self.data["totals"].items() 
-                       for h, m, s in [self._get_hms(v)]]
+        history_list = [{"name": k, "time": f"{h}h {m}m {s}s"}
+                        for k, v in self.data["totals"].items()
+                        for h, m, s in [self._get_hms(v)]]
         return {"categories": self.data["categories"], "active": self.active_cat, "history": history_list}
 
     def set_category(self, name):
@@ -188,12 +262,13 @@ class TimerApi:
 
         now = time.time()
         duration = int(now - self.start_time)
-        
+
         # Always update totals and save
         self.data["totals"][self.active_cat] += duration
+        self._record_session(self.active_cat, self.start_time, now)
         self._write_to_history(self.active_cat, duration)
         self.save_config()
-        
+
         self.active_cat = name
         self.start_time = now
 
@@ -208,14 +283,15 @@ class TimerApi:
 
     def update_config(self, new_cats):
         self.set_category(self.active_cat)
-        
+
         # Ensure Nothing stays at index 0
-        if "Nothing" in new_cats: new_cats.remove("Nothing")
+        if "Nothing" in new_cats:
+            new_cats.remove("Nothing")
         new_cats.insert(0, "Nothing")
-            
+
         new_totals = {name: self.data["totals"].get(name, 0) for name in new_cats}
         self.data["categories"], self.data["totals"] = new_cats, new_totals
-        
+
         self.active_cat = "Nothing"
         self.start_time = time.time()
         self.save_config()
@@ -234,8 +310,9 @@ class TimerApi:
         return {
             "active": self.active_cat,
             "session": session,
-            "total": self.data["totals"].get(self.active_cat, 0) + session
+            "total": self.data["totals"].get(self.active_cat, 0) + session,
         }
+
 
 html_content = """
 <!DOCTYPE html>
@@ -243,24 +320,25 @@ html_content = """
 <head>
     <style>
         :root { --bg: #0a0a0a; --accent: #00e5ff; --ring: #161616; --red: #ff4b2b; }
-        body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif; 
+        body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif;
                display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; }
-        .main-container { position: relative; width: 480px; height: 480px; transition: filter 0.3s; }
+        .main-container { position: relative; width: 520px; height: 520px; transition: filter 0.3s; }
         .blur { filter: blur(15px); pointer-events: none; }
         #hit-surface { position: absolute; width: 100%; height: 100%; z-index: 5; }
         .slice { fill: var(--ring); stroke: #222; stroke-width: 1; cursor: pointer; transition: fill 0.2s; }
         .slice:hover { fill: #222; }
         #hub { position: absolute; width: 100%; height: 100%; z-index: 6; pointer-events: none; transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
-        .needle { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); width: 4px; height: 40px; background: var(--accent); box-shadow: 0 0 15px var(--accent); border-radius: 2px; }
-        .label { position: absolute; width: 100px; text-align: center; font-weight: bold; font-size: 11px; color: #444; z-index: 7; pointer-events: none; text-transform: uppercase; }
+        .needle { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); width: 4px; height: 44px; background: var(--accent); box-shadow: 0 0 15px var(--accent); border-radius: 2px; }
+        .label { position: absolute; width: 110px; text-align: center; font-weight: bold; font-size: 11px; color: #444; z-index: 7; pointer-events: none; text-transform: uppercase; }
         .label.active { color: var(--accent); text-shadow: 0 0 10px var(--accent); }
-        .center-display { position: absolute; width: 280px; height: 280px; background: #000; border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 10px solid #222; z-index: 10; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        #session-time { font-size: 68px; color: var(--accent); font-family: monospace; line-height: 1; cursor: pointer; }
+        .center-display { position: absolute; width: 300px; height: 300px; background: #000; border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 10px solid #222; z-index: 10; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        #session-time { font-size: 72px; color: var(--accent); font-family: monospace; line-height: 1; cursor: pointer; }
         .total-box { color: #888; font-family: monospace; font-size: 13px; background: #111; padding: 4px 12px; border-radius: 15px; border: 1px solid #222;}
-        .controls { margin-top: 15px; display: flex; gap: 8px; }
+        .controls { margin-top: 15px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 240px; }
         .icon-btn { background: none; border: 1px solid #333; color: #555; cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
         .icon-btn:hover { color: white; border-color: #777; }
-        #settings-panel { position: absolute; width: 380px; background: rgba(15,15,15,0.98); border: 1px solid #333; padding: 20px; border-radius: 15px; z-index: 100; display: none; box-shadow: 0 0 50px black; max-height: 90vh; overflow-y: auto; }
+        #settings-panel, #gantt-panel { position: absolute; width: 520px; background: rgba(15,15,15,0.98); border: 1px solid #333; padding: 20px; border-radius: 15px; z-index: 100; display: none; box-shadow: 0 0 50px black; max-height: 90vh; overflow-y: auto; }
+        #gantt-panel { width: 660px; }
         textarea { width: 100%; height: 80px; background: #000; color: var(--accent); border: 1px solid #444; padding: 8px; box-sizing: border-box; margin-bottom: 15px; }
         .stats-table { width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 15px; color: #aaa; }
         .stats-table td { padding: 4px 0; border-bottom: 1px solid #222; }
@@ -273,6 +351,17 @@ html_content = """
         .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; font-size: 10px; color: #aaa; }
         .legend-item { display: flex; align-items: center; gap: 4px; }
         .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+        .gantt-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .gantt-date { color: #777; font-size: 11px; }
+        .gantt-frame { background: #070707; border: 1px solid #222; border-radius: 10px; padding: 12px; }
+        .gantt-axis { position: relative; height: 22px; margin-left: 110px; border-bottom: 1px solid #252525; color: #555; font-size: 10px; }
+        .axis-mark { position: absolute; transform: translateX(-50%); bottom: 4px; }
+        .gantt-row { display: flex; align-items: center; min-height: 34px; border-bottom: 1px solid #151515; }
+        .gantt-row:last-child { border-bottom: none; }
+        .gantt-label { width: 100px; padding-right: 10px; color: #aaa; font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .gantt-lane { position: relative; flex: 1; height: 26px; background: #101010; border-left: 1px solid #222; border-right: 1px solid #222; overflow: hidden; }
+        .gantt-block { position: absolute; top: 5px; height: 16px; min-width: 2px; border-radius: 4px; cursor: default; box-shadow: 0 0 10px rgba(0,0,0,0.35); }
+        .gantt-empty { color: #555; font-size: 12px; padding: 20px; text-align: center; }
     </style>
 </head>
 <body>
@@ -297,6 +386,20 @@ html_content = """
         <button class="save-btn" style="background:#222; color:#777" onclick="toggleSettings()">CLOSE</button>
     </div>
 
+    <div id="gantt-panel">
+        <div class="gantt-toolbar">
+            <h4 style="margin:0; color:var(--accent); letter-spacing:1px">GANTT / TIMELINE VIEW</h4>
+            <div style="display:flex; gap:6px;">
+                <button class="icon-btn" onclick="shiftGanttDay(-1)">← PREV DAY</button>
+                <button class="icon-btn" onclick="shiftGanttDay(0)">TODAY</button>
+                <button class="icon-btn" onclick="shiftGanttDay(1)">NEXT DAY →</button>
+            </div>
+        </div>
+        <div id="gantt-date" class="gantt-date"></div>
+        <div id="gantt-chart" class="gantt-frame"></div>
+        <button class="save-btn" style="background:#222; color:#777" onclick="toggleGantt()">CLOSE</button>
+    </div>
+
     <div class="main-container" id="app-ui">
         <svg id="hit-surface" viewBox="0 0 100 100"></svg>
         <div id="hub"><div class="needle"></div></div>
@@ -305,6 +408,7 @@ html_content = """
             <div class="total-box">TOTAL <span id="total-time">00:00:00</span></div>
             <div class="controls">
                 <button class="icon-btn" onclick="toggleSettings()">STATS/EDIT</button>
+                <button class="icon-btn" onclick="toggleGantt()">GANTT</button>
                 <button class="icon-btn" onclick="resetCurrent()" style="color:var(--red)">RESET</button>
             </div>
         </div>
@@ -313,6 +417,7 @@ html_content = """
     <script>
         let cats = [];
         let currentWeekOffset = 0;
+        let ganttDateOffset = 0;
         const hub = document.getElementById('hub');
         const svg = document.getElementById('hit-surface');
 
@@ -320,7 +425,7 @@ html_content = """
             "#00e5ff", "#ff4b2b", "#ffd166", "#06d6a0", "#9b5de5",
             "#f15bb5", "#fee440", "#00bbf9", "#f77f00", "#80ed99"
         ];
-        
+
         function format(s, full=false) {
             let h = Math.floor(s / 3600).toString().padStart(2, '0');
             let m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
@@ -342,6 +447,30 @@ html_content = """
             return Object.entries(day.totals)
                 .filter(([cat]) => cat !== "Nothing")
                 .reduce((sum, [, seconds]) => sum + seconds, 0);
+        }
+
+        function addDays(date, days) {
+            const d = new Date(date);
+            d.setDate(d.getDate() + days);
+            return d;
+        }
+
+        function localDateString(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function timeToMinutes(dateTimeText) {
+            const timePart = dateTimeText.split(' ')[1] || '00:00:00';
+            const parts = timePart.split(':').map(Number);
+            return parts[0] * 60 + parts[1] + (parts[2] || 0) / 60;
+        }
+
+        function displayTime(dateTimeText) {
+            const timePart = dateTimeText.split(' ')[1] || '00:00:00';
+            return timePart.slice(0, 5);
         }
 
         function changeWeek(direction) {
@@ -421,9 +550,11 @@ html_content = """
 
         function toggleSettings() {
             const panel = document.getElementById('settings-panel');
+            const gantt = document.getElementById('gantt-panel');
             const ui = document.getElementById('app-ui');
             const isVisible = panel.style.display === 'block';
             if (!isVisible) {
+                gantt.style.display = 'none';
                 window.pywebview.api.get_init_data().then(data => {
                     const table = document.getElementById('history-table');
                     table.innerHTML = data.history.map(h => `<tr><td>${h.name}</td><td>${h.time}</td></tr>`).join('');
@@ -435,7 +566,99 @@ html_content = """
             ui.className = isVisible ? 'main-container' : 'main-container blur';
         }
 
-        function resetCurrent() { if(confirm("Reset current session?")) window.pywebview.api.reset_timer(); }
+        function toggleGantt() {
+            const panel = document.getElementById('gantt-panel');
+            const settings = document.getElementById('settings-panel');
+            const ui = document.getElementById('app-ui');
+            const isVisible = panel.style.display === 'block';
+
+            if (!isVisible) {
+                settings.style.display = 'none';
+                ganttDateOffset = 0;
+                loadGanttChart();
+            }
+
+            panel.style.display = isVisible ? 'none' : 'block';
+            ui.className = isVisible ? 'main-container' : 'main-container blur';
+        }
+
+        function shiftGanttDay(direction) {
+            if (direction === 0) {
+                ganttDateOffset = 0;
+            } else {
+                ganttDateOffset += direction;
+            }
+            loadGanttChart();
+        }
+
+        function loadGanttChart() {
+            const targetDate = localDateString(addDays(new Date(), ganttDateOffset));
+            window.pywebview.api.get_gantt_report(targetDate).then(data => {
+                document.getElementById('gantt-date').innerText = data.date;
+                renderGantt(data);
+            });
+        }
+
+        function renderGantt(data) {
+            const chart = document.getElementById('gantt-chart');
+            chart.innerHTML = '';
+
+            const sessions = data.sessions || [];
+            const chartCategories = data.categories.filter(cat => sessions.some(s => s.category === cat));
+
+            if (sessions.length === 0) {
+                chart.innerHTML = '<div class="gantt-empty">No sessions recorded for this day yet.</div>';
+                return;
+            }
+
+            const axis = document.createElement('div');
+            axis.className = 'gantt-axis';
+            [0, 6, 12, 18, 24].forEach(hour => {
+                const mark = document.createElement('div');
+                mark.className = 'axis-mark';
+                mark.style.left = `${(hour / 24) * 100}%`;
+                mark.innerText = `${String(hour).padStart(2, '0')}:00`;
+                axis.appendChild(mark);
+            });
+            chart.appendChild(axis);
+
+            chartCategories.forEach(cat => {
+                const row = document.createElement('div');
+                row.className = 'gantt-row';
+
+                const label = document.createElement('div');
+                label.className = 'gantt-label';
+                label.innerText = cat;
+                label.title = cat;
+
+                const lane = document.createElement('div');
+                lane.className = 'gantt-lane';
+
+                sessions.filter(s => s.category === cat).forEach(s => {
+                    const startMin = Math.max(0, Math.min(1440, timeToMinutes(s.start)));
+                    const endMin = Math.max(startMin + 0.5, Math.min(1440, timeToMinutes(s.end)));
+                    const left = (startMin / 1440) * 100;
+                    const width = Math.max(0.25, ((endMin - startMin) / 1440) * 100);
+                    const colorIndex = Math.max(0, data.categories.indexOf(cat) - 1);
+
+                    const block = document.createElement('div');
+                    block.className = 'gantt-block';
+                    block.style.left = `${left}%`;
+                    block.style.width = `${width}%`;
+                    block.style.background = chartColors[colorIndex % chartColors.length];
+                    block.title = `${cat}\\n${displayTime(s.start)} → ${displayTime(s.end)}\\n${secondsToLabel(s.duration || 0)}${s.live ? ' / live' : ''}`;
+                    lane.appendChild(block);
+                });
+
+                row.appendChild(label);
+                row.appendChild(lane);
+                chart.appendChild(row);
+            });
+        }
+
+        function resetCurrent() {
+            if(confirm("Reset current session?")) window.pywebview.api.reset_timer();
+        }
 
         function saveSettings() {
             const lines = document.getElementById('cat-input').value.split('\\n').filter(l => l.trim() !== "");
@@ -458,10 +681,12 @@ html_content = """
                 path.onclick = () => select(name, centerAngle);
                 svg.appendChild(path);
                 const label = document.createElement('div');
-                label.className = 'label'; label.id = 'lbl-' + name; label.innerText = name;
+                label.className = 'label';
+                label.id = 'lbl-' + name;
+                label.innerText = name;
                 const rad = (centerAngle - 90) * (Math.PI / 180);
-                label.style.left = (240 + 195 * Math.cos(rad) - 50) + 'px';
-                label.style.top = (240 + 195 * Math.sin(rad) - 10) + 'px';
+                label.style.left = (260 + 210 * Math.cos(rad) - 55) + 'px';
+                label.style.top = (260 + 210 * Math.sin(rad) - 10) + 'px';
                 document.getElementById('app-ui').appendChild(label);
             });
             const activeIdx = cats.indexOf(data.active);
@@ -482,6 +707,9 @@ html_content = """
                 window.pywebview.api.get_status().then(s => {
                     document.getElementById('session-time').innerText = format(s.session);
                     document.getElementById('total-time').innerText = format(s.total, true);
+                    if (document.getElementById('gantt-panel').style.display === 'block') {
+                        loadGanttChart();
+                    }
                 });
             }
         }, 1000);
@@ -490,7 +718,15 @@ html_content = """
 </html>
 """
 
+
 if __name__ == '__main__':
     api = TimerApi()
-    window = webview.create_window('Task Gauge Pro', html=html_content, js_api=api, width=540, height=600, resizable=False)
+    window = webview.create_window(
+        'Task Gauge Pro',
+        html=html_content,
+        js_api=api,
+        width=780,
+        height=740,
+        resizable=False,
+    )
     webview.start(gui='edgechromium')
