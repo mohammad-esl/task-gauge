@@ -13,6 +13,7 @@ class TimerApi:
         self.config_file = "config.json"
         self.report_file = "daily_report.csv"
         self.sessions_file = "timer_sessions.json"
+        self.day_start_hour = 6
         self.last_report_save = time.time()
         self.report_save_interval = 300  # 5 minutes
 
@@ -20,7 +21,7 @@ class TimerApi:
         self.data = {
             "categories": ["Nothing", "Education", "Work", "Study", "Project 1"],
             "totals": {"Nothing": 0, "Education": 0, "Work": 0, "Study": 0, "Project 1": 0},
-            "last_date": datetime.now().strftime("%Y-%m-%d"),
+            "last_date": self._current_logical_date_str(),
         }
 
         self.load_config()
@@ -44,7 +45,7 @@ class TimerApi:
                 pass
 
         if "last_date" not in self.data:
-            self.data["last_date"] = datetime.now().strftime("%Y-%m-%d")
+            self.data["last_date"] = self._current_logical_date_str()
 
     def save_config(self):
         with open(self.config_file, "w") as f:
@@ -52,6 +53,91 @@ class TimerApi:
 
     def _parse_history_duration(self, hours, minutes, seconds):
         return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+
+    def _logical_day_start(self, day_value):
+        if isinstance(day_value, str):
+            day_value = datetime.strptime(day_value, "%Y-%m-%d").date()
+        return datetime.combine(day_value, datetime.min.time()) + timedelta(hours=self.day_start_hour)
+
+    def _logical_date(self, dt_value):
+        return (dt_value - timedelta(hours=self.day_start_hour)).date()
+
+    def _current_logical_date_str(self):
+        return self._logical_date(datetime.now()).strftime("%Y-%m-%d")
+
+    def _finalize_active_session(self, end_ts):
+        if not hasattr(self, "active_cat") or not hasattr(self, "start_time"):
+            return 0
+
+        duration = int(end_ts - self.start_time)
+        if duration <= 0:
+            self.start_time = end_ts
+            return 0
+
+        self.data["totals"][self.active_cat] = self.data["totals"].get(self.active_cat, 0) + duration
+        self._write_to_history(self.active_cat, duration, end_ts=end_ts)
+        self._record_session(self.active_cat, self.start_time, end_ts)
+        self.start_time = end_ts
+        return duration
+
+    def _add_duration_to_daily_report(self, date_str, category, duration):
+        if duration <= 0:
+            return
+
+        rows = []
+        fieldnames = ["date"] + self.data["categories"]
+
+        if os.path.exists(self.report_file):
+            with open(self.report_file, "r", newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+
+                for field in reader.fieldnames or []:
+                    if field not in fieldnames:
+                        fieldnames.append(field)
+
+        existing = {row["date"]: row for row in rows if "date" in row}
+        row = existing.get(date_str, {"date": date_str})
+
+        for cat in fieldnames:
+            if cat == "date":
+                continue
+            row.setdefault(cat, "00:00:00")
+
+        try:
+            h, m, s = [int(x) for x in row.get(category, "00:00:00").split(":")]
+            current_seconds = h * 3600 + m * 60 + s
+        except Exception:
+            current_seconds = 0
+
+        row[category] = self._format_hms(current_seconds + duration)
+        existing[date_str] = row
+
+        with open(self.report_file, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(existing.values())
+
+    def _align_active_session_to_logical_day(self):
+        if not hasattr(self, "active_cat") or not hasattr(self, "start_time"):
+            return
+
+        now_ts = time.time()
+        start_dt = datetime.fromtimestamp(self.start_time)
+        current_dt = datetime.fromtimestamp(now_ts)
+
+        if self._logical_date(start_dt) == self._logical_date(current_dt):
+            return
+
+        previous_logical_date = self._logical_date(start_dt).strftime("%Y-%m-%d")
+        rollover_ts = self._logical_day_start(self._logical_date(current_dt)).timestamp()
+        duration = int(rollover_ts - self.start_time)
+        if duration > 0:
+            self._write_to_history(self.active_cat, duration, end_ts=rollover_ts)
+            self._record_session(self.active_cat, self.start_time, rollover_ts)
+            self._add_duration_to_daily_report(previous_logical_date, self.active_cat, duration)
+        self.start_time = rollover_ts
+        self.save_config()
 
     def _load_history_sessions(self):
         if not os.path.exists(self.log_file):
@@ -104,7 +190,7 @@ class TimerApi:
         try:
             start_dt = datetime.strptime(session["start"], "%Y-%m-%d %H:%M:%S")
             end_dt = datetime.strptime(session["end"], "%Y-%m-%d %H:%M:%S")
-            day_start = datetime.strptime(date_str, "%Y-%m-%d")
+            day_start = self._logical_day_start(date_str)
         except Exception:
             return None
 
@@ -151,7 +237,7 @@ class TimerApi:
 
         sessions = self._load_sessions()
         sessions.append({
-            "date": start_dt.strftime("%Y-%m-%d"),
+            "date": self._logical_date(start_dt).strftime("%Y-%m-%d"),
             "category": name,
             "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
@@ -165,6 +251,7 @@ class TimerApi:
         self._save_sessions(sessions)
 
     def _get_live_totals(self):
+        self._align_active_session_to_logical_day()
         totals = self.data["totals"].copy()
 
         if hasattr(self, "active_cat") and hasattr(self, "start_time"):
@@ -209,19 +296,19 @@ class TimerApi:
     def get_today_report(self):
         self._check_daily_reset()
         return {
-            "date": datetime.now().strftime("%Y-%m-%d"),
+            "date": self._current_logical_date_str(),
             "totals": self._get_live_totals(),
         }
 
     def save_today_report(self):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._current_logical_date_str()
         self._save_daily_report(today)
         return {"status": "saved"}
 
     def get_week_report(self, week_offset=0):
-        self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+        self._save_daily_report(self._current_logical_date_str())
 
-        today = datetime.now().date()
+        today = self._logical_date(datetime.now())
         start_of_week = today - timedelta(days=today.weekday())
         start_of_week = start_of_week + timedelta(weeks=int(week_offset))
         end_of_week = start_of_week + timedelta(days=6)
@@ -263,9 +350,10 @@ class TimerApi:
 
     def get_gantt_report(self, date_str=None):
         self._check_daily_reset()
+        self._align_active_session_to_logical_day()
 
         if not date_str:
-            date_str = datetime.now().strftime("%Y-%m-%d")
+            date_str = self._current_logical_date_str()
 
         # Primary source: timer_history.txt.
         # Each history row stores the session end time and duration, so we reconstruct:
@@ -310,10 +398,12 @@ class TimerApi:
         }
 
     def _check_daily_reset(self):
-        today = datetime.now().date()
+        today = self._logical_date(datetime.now())
         last = datetime.strptime(self.data["last_date"], "%Y-%m-%d").date()
 
         if today != last:
+            rollover_ts = self._logical_day_start(today).timestamp()
+            self._finalize_active_session(rollover_ts)
             self._save_daily_report(self.data["last_date"])
 
             self.data["totals"] = {k: 0 for k in self.data["categories"]}
@@ -327,12 +417,17 @@ class TimerApi:
     def _get_hms(self, s):
         return s // 3600, (s % 3600) // 60, s % 60
 
-    def _write_to_history(self, name, session_duration):
+    def _write_to_history(self, name, session_duration, end_ts=None):
         # We log "Nothing" to history only if it was a significant "break" (> 10 seconds)
         if session_duration < 10:
             return
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if end_ts is None:
+            end_dt = datetime.now()
+        else:
+            end_dt = datetime.fromtimestamp(end_ts)
+
+        timestamp = end_dt.strftime("%Y-%m-%d %H:%M")
         sh, sm, ss = self._get_hms(session_duration)
         th, tm, ts = self._get_hms(self.data["totals"].get(name, 0))
 
@@ -354,23 +449,22 @@ class TimerApi:
         self._check_daily_reset()
 
         now = time.time()
-        duration = int(now - self.start_time)
-
-        # Always update totals and save
-        self.data["totals"][self.active_cat] += duration
-        self._write_to_history(self.active_cat, duration)
+        self._finalize_active_session(now)
         self.save_config()
 
         self.active_cat = name
         self.start_time = now
 
-        self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+        self._save_daily_report(self._current_logical_date_str())
         self.last_report_save = time.time()
 
         return {"status": "success"}
 
     def reset_timer(self):
-        self.start_time = time.time()
+        self._check_daily_reset()
+        now = time.time()
+        self._finalize_active_session(now)
+        self.save_config()
         return {"status": "reset"}
 
     def update_config(self, new_cats):
@@ -387,14 +481,15 @@ class TimerApi:
         self.active_cat = "Nothing"
         self.start_time = time.time()
         self.save_config()
-        self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+        self._save_daily_report(self._current_logical_date_str())
         return self.get_init_data()
 
     def get_status(self):
         self._check_daily_reset()
+        self._align_active_session_to_logical_day()
 
         if time.time() - self.last_report_save >= self.report_save_interval:
-            self._save_daily_report(datetime.now().strftime("%Y-%m-%d"))
+            self._save_daily_report(self._current_logical_date_str())
             self.last_report_save = time.time()
 
         now = time.time()
@@ -554,10 +649,17 @@ html_content = """
             return `${y}-${m}-${d}`;
         }
 
-        function timeToMinutes(dateTimeText) {
+        function logicalDateString(date) {
+            const shifted = new Date(date);
+            shifted.setHours(shifted.getHours() - 6, shifted.getMinutes(), shifted.getSeconds(), shifted.getMilliseconds());
+            return localDateString(shifted);
+        }
+
+        function timeToTimelineMinutes(dateTimeText) {
             const timePart = dateTimeText.split(' ')[1] || '00:00:00';
             const parts = timePart.split(':').map(Number);
-            return parts[0] * 60 + parts[1] + (parts[2] || 0) / 60;
+            const totalMinutes = parts[0] * 60 + parts[1] + (parts[2] || 0) / 60;
+            return (totalMinutes - 360 + 1440) % 1440;
         }
 
         function displayTime(dateTimeText) {
@@ -684,7 +786,7 @@ html_content = """
         }
 
         function loadGanttChart() {
-            const targetDate = localDateString(addDays(new Date(), ganttDateOffset));
+            const targetDate = logicalDateString(addDays(new Date(), ganttDateOffset));
             window.pywebview.api.get_gantt_report(targetDate).then(data => {
                 document.getElementById('gantt-date').innerText = data.date;
                 renderGantt(data);
@@ -705,11 +807,11 @@ html_content = """
 
             const axis = document.createElement('div');
             axis.className = 'gantt-axis';
-            [0, 6, 12, 18, 24].forEach(hour => {
+            [6, 12, 18, 24, 30].forEach(hour => {
                 const mark = document.createElement('div');
                 mark.className = 'axis-mark';
-                mark.style.left = `${(hour / 24) * 100}%`;
-                mark.innerText = `${String(hour).padStart(2, '0')}:00`;
+                mark.style.left = `${((hour - 6) / 24) * 100}%`;
+                mark.innerText = `${String(hour % 24).padStart(2, '0')}:00`;
                 axis.appendChild(mark);
             });
             chart.appendChild(axis);
@@ -727,8 +829,11 @@ html_content = """
                 lane.className = 'gantt-lane';
 
                 sessions.filter(s => s.category === cat).forEach(s => {
-                    const startMin = Math.max(0, Math.min(1440, timeToMinutes(s.start)));
-                    const endMin = Math.max(startMin + 0.5, Math.min(1440, timeToMinutes(s.end)));
+                    const startMin = Math.max(0, Math.min(1440, timeToTimelineMinutes(s.start)));
+                    let endMin = Math.max(0, Math.min(1440, timeToTimelineMinutes(s.end)));
+                    if (endMin <= startMin) {
+                        endMin = 1440;
+                    }
                     const left = (startMin / 1440) * 100;
                     const width = Math.max(0.25, ((endMin - startMin) / 1440) * 100);
                     const colorIndex = Math.max(0, data.categories.indexOf(cat) - 1);
