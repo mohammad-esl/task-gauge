@@ -3,6 +3,8 @@ __pycache__/
 config.json
 timer_history.txt
 daily_report.csv
+timer_sessions.json
 dist/
 build/
 *.exe
+daily_report
