@@ -309,7 +309,8 @@ class TimerApi:
         self._save_daily_report(self._current_logical_date_str())
 
         today = self._logical_date(datetime.now())
-        start_of_week = today - timedelta(days=today.weekday())
+        days_since_saturday = (today.weekday() + 2) % 7
+        start_of_week = today - timedelta(days=days_since_saturday)
         start_of_week = start_of_week + timedelta(weeks=int(week_offset))
         end_of_week = start_of_week + timedelta(days=6)
 
