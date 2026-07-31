@@ -8,3 +8,4 @@ dist/
 build/
 *.exe
 daily_report
+venv/

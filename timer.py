@@ -728,7 +728,16 @@ html_content = """
                         const segment = document.createElement("div");
                         segment.style.height = `${(seconds / dayTotal) * 100}%`;
                         segment.style.background = chartColors[i % chartColors.length];
+                        segment.style.position = "relative";
                         segment.title = `${cat}: ${secondsToLabel(seconds)}`;
+
+                        if (cat === "CivilAgent") {
+                            const catLabel = document.createElement("div");
+                            catLabel.style.cssText = "position:absolute; top:1px; left:0; right:0; text-align:center; font-size:8px; color:#000; font-family:monospace; font-weight:bold; pointer-events:none; overflow:hidden;";
+                            catLabel.innerText = secondsToLabel(seconds);
+                            segment.appendChild(catLabel);
+                        }
+
                         bar.appendChild(segment);
                     });
 
