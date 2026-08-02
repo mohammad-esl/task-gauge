@@ -208,7 +208,6 @@ class TimerApi:
         clipped["duration"] = int((clipped_end - clipped_start).total_seconds())
         return clipped
 
-
     def _load_sessions(self):
         if not os.path.exists(self.sessions_file):
             return []

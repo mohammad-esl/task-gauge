@@ -16,7 +16,7 @@ It lets you switch between activity categories, track the current session, and r
 Install the dependency and start the app:
 
 ```bash
-pip install pywebview
+pip install -r requirements.txt
 python timer.py
 ```
 
