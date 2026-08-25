@@ -157,7 +157,11 @@ function toggleSettings() {
         window.pywebview.api.get_init_data().then(data => {
             const table = document.getElementById('history-table');
             table.innerHTML = data.history.map(h => `<tr><td>${h.name}</td><td>${h.time}</td></tr>`).join('');
-            document.getElementById('cat-input').value = data.categories.filter(c => c !== "Nothing").join('\n');
+            taskRows = data.categories.filter(c => c !== "Nothing");
+            window.pywebview.api.categories_with_history().then(names => {
+                categoriesWithHistory = new Set(names);
+                renderTaskRows();
+            });
             loadWeekChart();
         });
     }
@@ -621,8 +625,73 @@ function resetCurrent() {
     if(confirm("Reset current session?")) window.pywebview.api.reset_timer();
 }
 
+let taskRows = [];
+let categoriesWithHistory = new Set();
+
+function renderTaskRows() {
+    const list = document.getElementById('task-list');
+    list.innerHTML = '';
+    taskRows.forEach((name, i) => {
+        const row = document.createElement('div');
+        row.className = 'task-row';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = name;
+        input.oninput = () => { taskRows[i] = input.value; };
+
+        const upBtn = document.createElement('button');
+        upBtn.className = 'task-row-btn';
+        upBtn.innerText = '↑';
+        upBtn.disabled = i === 0;
+        upBtn.onclick = () => moveTaskRow(i, -1);
+
+        const downBtn = document.createElement('button');
+        downBtn.className = 'task-row-btn';
+        downBtn.innerText = '↓';
+        downBtn.disabled = i === taskRows.length - 1;
+        downBtn.onclick = () => moveTaskRow(i, 1);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'task-row-btn delete-btn';
+        delBtn.innerText = '×';
+        delBtn.title = categoriesWithHistory.has(name) ? 'This task has recorded history — deleting it only hides it, past sessions are kept' : 'Delete';
+        delBtn.onclick = () => removeTaskRow(i);
+
+        row.appendChild(input);
+        row.appendChild(upBtn);
+        row.appendChild(downBtn);
+        row.appendChild(delBtn);
+        list.appendChild(row);
+    });
+}
+
+function addTaskRow() {
+    taskRows.push('');
+    renderTaskRows();
+    const inputs = document.querySelectorAll('#task-list input[type="text"]');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+}
+
+function moveTaskRow(i, direction) {
+    const j = i + direction;
+    if (j < 0 || j >= taskRows.length) return;
+    [taskRows[i], taskRows[j]] = [taskRows[j], taskRows[i]];
+    renderTaskRows();
+}
+
+function removeTaskRow(i) {
+    const name = taskRows[i];
+    if (categoriesWithHistory.has(name)) {
+        const ok = confirm(`"${name}" has recorded history. Removing it from this list only hides it from the dial — its past sessions stay in the Gantt/reports. Continue?`);
+        if (!ok) return;
+    }
+    taskRows.splice(i, 1);
+    renderTaskRows();
+}
+
 function saveSettings() {
-    const lines = document.getElementById('cat-input').value.split('\n').filter(l => l.trim() !== "");
+    const lines = taskRows.map(n => n.trim()).filter(n => n !== "");
     window.pywebview.api.update_config(lines).then(initUI);
     toggleSettings();
 }

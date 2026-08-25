@@ -564,6 +564,14 @@ class TimerApi:
                      f"Session: {sh}h {sm}m {ss}s | Total: {th}h {tm}m {ts}s\n")
         self.history.append(log_entry)
 
+    def categories_with_history(self):
+        """Category names that have at least one recorded session, so the
+        settings UI can warn before deleting one (deleting a category only
+        drops its running total from config.json — its past sessions stay
+        in timer_sessions.json/history/daily_report untouched, just no
+        longer shown on the dial or dashboard)."""
+        return sorted({s.get("category") for s in self.sessions.load() if s.get("category")})
+
     def get_init_data(self):
         history_list = [{"name": k, "time": "{}h {}m {}s".format(*time_utils.get_hms(v))}
                         for k, v in self.data["totals"].items()]

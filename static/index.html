@@ -19,8 +19,9 @@
         <div id="week-chart"></div>
         <div id="week-legend" class="legend"></div>
 
-        <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">EDIT TASKS (One per line)</h5>
-        <textarea id="cat-input" placeholder="Enter tasks..."></textarea>
+        <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">EDIT TASKS</h5>
+        <div id="task-list"></div>
+        <button class="icon-btn" style="width:100%; margin-bottom:10px;" onclick="addTaskRow()">+ ADD TASK</button>
         <button class="save-btn" onclick="saveSettings()">APPLY CHANGES</button>
         <button class="save-btn" style="background:#222; color:#777" onclick="toggleSettings()">CLOSE</button>
     </div>

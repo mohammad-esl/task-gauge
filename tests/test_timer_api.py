@@ -180,6 +180,22 @@ def test_get_gantt_report_includes_both_live_sessions_in_dual_mode(tmp_path):
     assert {s["category"] for s in live_sessions} == {"Work", "Study"}
 
 
+def test_categories_with_history_reflects_recorded_sessions(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 10:00:00", "end": "2026-08-06 11:00:00", "duration": 3600,
+    })
+
+    assert api.categories_with_history() == ["Work"]
+
+
+def test_categories_with_history_empty_when_no_sessions(tmp_path):
+    api = TimerApi(str(tmp_path))
+    assert api.categories_with_history() == []
+
+
 def test_get_week_report_has_seven_days(tmp_path):
     api = TimerApi(str(tmp_path))
     report = api.get_week_report(0)

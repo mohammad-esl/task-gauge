@@ -24,6 +24,14 @@ body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif;
 #settings-panel, #gantt-panel { position: absolute; width: 520px; background: rgba(15,15,15,0.98); border: 1px solid #333; padding: 20px; border-radius: 15px; z-index: 100; display: none; box-shadow: 0 0 50px black; max-height: 90vh; overflow-y: auto; }
 #gantt-panel { width: 660px; }
 textarea { width: 100%; height: 80px; background: #000; color: var(--accent); border: 1px solid #444; padding: 8px; box-sizing: border-box; margin-bottom: 15px; }
+#task-list { margin-bottom: 8px; }
+.task-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.task-row input[type="text"] { flex: 1; min-width: 0; background: #000; color: var(--accent); border: 1px solid #444; padding: 7px 8px; box-sizing: border-box; font-size: 12px; border-radius: 4px; }
+.task-row-btn { background: #181818; border: 1px solid #333; color: #777; cursor: pointer; width: 24px; height: 26px; flex-shrink: 0; border-radius: 4px; font-size: 11px; line-height: 1; }
+.task-row-btn:hover:not(:disabled) { color: white; border-color: #777; }
+.task-row-btn:disabled { opacity: 0.3; cursor: default; }
+.task-row-btn.delete-btn { color: #ff8a8a; border-color: #3a1414; }
+.task-row-btn.delete-btn:hover { color: #ffb3b3; border-color: #5a1f1f; }
 .stats-table { width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 15px; color: #aaa; }
 .stats-table td { padding: 4px 0; border-bottom: 1px solid #222; }
 .stats-table tr td:last-child { text-align: right; color: var(--accent); }

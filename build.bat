@@ -1,7 +1,8 @@
 @echo off
 REM Rebuilds dist\TaskGaugePro\TaskGaugePro.exe from source.
 REM Uses the "TimeTracker" conda env, which has pyinstaller + pywebview installed.
-REM After rebuilding, your data\ folder next to the exe is untouched.
+REM WARNING: --noconfirm wipes and recreates the whole dist\TaskGaugePro\ folder,
+REM including any data\ next to the exe. Re-copy data\ after every rebuild.
 
 "C:\Users\Mardavij\.conda\envs\TimeTracker\Scripts\pyinstaller.exe" ^
   --name "TaskGaugePro" ^
