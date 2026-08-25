@@ -88,6 +88,74 @@ def test_sessions_store_caps_at_max(tmp_path):
     assert [s["i"] for s in loaded] == [2, 3, 4]
 
 
+def test_sessions_store_append_assigns_id(tmp_path):
+    store = SessionsStore(str(tmp_path / "sessions.json"))
+    session_id = store.append({"category": "Work"})
+    assert session_id
+    loaded = store.load()
+    assert loaded[0]["id"] == session_id
+
+
+def test_sessions_store_loading_legacy_file_backfills_ids(tmp_path):
+    path = tmp_path / "sessions.json"
+    path.write_text('[{"category": "Work", "duration": 60}]', encoding="utf-8")
+    store = SessionsStore(str(path))
+    loaded = store.load()
+    assert loaded[0].get("id")
+
+    # ids are persisted back to disk, not just assigned in memory
+    fresh_store = SessionsStore(str(path))
+    assert fresh_store.load()[0]["id"] == loaded[0]["id"]
+
+
+def test_sessions_store_update_by_id(tmp_path):
+    store = SessionsStore(str(tmp_path / "sessions.json"))
+    session_id = store.append({"category": "Work", "start": "a", "end": "b"})
+    updated = store.update(session_id, start="c", end="d")
+    assert updated["start"] == "c"
+    assert updated["end"] == "d"
+    assert updated["category"] == "Work"  # untouched fields survive
+
+
+def test_sessions_store_update_missing_id_returns_none(tmp_path):
+    store = SessionsStore(str(tmp_path / "sessions.json"))
+    assert store.update("does-not-exist", start="x") is None
+
+
+def test_sessions_store_delete_by_id(tmp_path):
+    store = SessionsStore(str(tmp_path / "sessions.json"))
+    keep_id = store.append({"category": "Work"})
+    delete_id = store.append({"category": "Study"})
+
+    assert store.delete(delete_id) is True
+    remaining = store.load()
+    assert len(remaining) == 1
+    assert remaining[0]["id"] == keep_id
+
+
+def test_sessions_store_delete_missing_id_returns_false(tmp_path):
+    store = SessionsStore(str(tmp_path / "sessions.json"))
+    assert store.delete("does-not-exist") is False
+
+
+def test_sessions_store_get_by_id(tmp_path):
+    store = SessionsStore(str(tmp_path / "sessions.json"))
+    session_id = store.append({"category": "Work"})
+    assert store.get(session_id)["category"] == "Work"
+    assert store.get("does-not-exist") is None
+
+
+def test_sessions_store_append_many_single_write(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = SessionsStore(str(path))
+    ids = store.append_many([{"category": "Work"}, {"category": "Study"}])
+    assert len(ids) == 2
+    assert len(set(ids)) == 2  # unique ids
+    loaded = store.load()
+    assert len(loaded) == 2
+    assert loaded[0]["id"] == ids[0]
+
+
 def test_daily_report_store_roundtrip(tmp_path):
     store = DailyReportStore(str(tmp_path / "report.csv"))
     rows, fieldnames = store.load(categories=["Nothing", "Work"])

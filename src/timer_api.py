@@ -6,10 +6,12 @@ from datetime import datetime, timedelta
 
 import time_utils
 from storage import ConfigStore, HistoryLog, SessionsStore, DailyReportStore
+from edit_log import EditLog
 
 DEFAULT_CATEGORIES = ["Nothing", "Education", "Work", "Study", "Project 1"]
 REPORT_SAVE_INTERVAL = 300  # 5 minutes
 BREAK_LOG_THRESHOLD = 10    # seconds; shorter "Nothing" sessions aren't logged
+MAX_UNDO_STEPS = 20         # in-memory only; cleared on app restart
 
 
 class TimerApi:
@@ -18,6 +20,8 @@ class TimerApi:
         self.history = HistoryLog(os.path.join(data_dir, "timer_history.txt"))
         self.sessions = SessionsStore(os.path.join(data_dir, "timer_sessions.json"))
         self.report = DailyReportStore(os.path.join(data_dir, "daily_report.csv"))
+        self.edit_log = EditLog(os.path.join(data_dir, "gantt_edit_log.json"))
+        self._undo_stack = []
 
         self.last_report_save = time.time()
 
@@ -39,6 +43,45 @@ class TimerApi:
 
         self.active_cat = "Nothing"
         self.start_time = time.time()
+
+        self._import_missing_history_sessions()
+
+    def _import_missing_history_sessions(self):
+        """timer_sessions.json is now the source of truth for the Gantt
+        view (needed so sessions can be edited/deleted by id), but it only
+        started being written after timer_history.txt already existed.
+        One-time backfill: any history.txt session not already present
+        gets imported with a fresh id.
+
+        history.txt only stores the end time to whole-minute precision
+        (its timestamps are "%Y-%m-%d %H:%M"), while sessions.json is
+        precise to the second. Matching on the exact string would treat
+        the same real session as "missing" and re-import it as a near
+        duplicate a few seconds off from the original, so match on
+        (category, end-minute) instead."""
+        def minute_key(s):
+            end = s.get("end", "")
+            return (s.get("category"), end[:16])  # "YYYY-MM-DD HH:MM"
+
+        existing = {minute_key(s) for s in self.sessions.load()}
+
+        to_import = []
+        for session in self.history.load_sessions():
+            key = minute_key(session)
+            if key in existing:
+                continue
+
+            to_import.append({
+                "date": session["date"],
+                "category": session["category"],
+                "start": session["start"],
+                "end": session["end"],
+                "duration": session["duration"],
+            })
+            existing.add(key)
+
+        if to_import:
+            self.sessions.append_many(to_import)
 
     def save_config(self):
         self.config.save(self.data)
@@ -202,14 +245,20 @@ class TimerApi:
         if not date_str:
             date_str = time_utils.current_logical_date_str()
 
-        # Primary source: timer_history.txt. Each history row stores the
-        # session end time and duration, so we reconstruct:
-        # start_time = end_time - duration.
+        # Source of truth: timer_sessions.json. Each block keeps the id of
+        # the underlying record (session_id) and whether it was clipped to
+        # fit this day (clipped) so the frontend can send edits back
+        # against the full original record, not just the visible slice.
         filtered = []
-        for session in self.history.load_sessions():
+        for session in self.sessions.load():
             clipped = self._clip_session_to_day(session, date_str)
-            if clipped:
-                filtered.append(clipped)
+            if not clipped:
+                continue
+            clipped["session_id"] = session.get("id")
+            clipped["clipped"] = (
+                clipped["start"] != session.get("start") or clipped["end"] != session.get("end")
+            )
+            filtered.append(clipped)
 
         # Add the current live session without saving it yet.
         now = time.time()
@@ -225,6 +274,8 @@ class TimerApi:
         }
         clipped = self._clip_session_to_day(live_session, date_str)
         if duration > 0 and clipped:
+            clipped["session_id"] = None
+            clipped["clipped"] = False
             filtered.append(clipped)
 
         categories = list(self.data["categories"])
@@ -240,6 +291,162 @@ class TimerApi:
             "categories": categories,
             "sessions": filtered,
         }
+
+    def _resync_day(self, date_str):
+        """Recompute totals/daily_report for a logical day directly from
+        timer_sessions.json. Called after any manual edit/delete/create so
+        both the CSV and (for today) the in-memory running totals shown on
+        the main dial stay consistent with the session records, which are
+        now the source of truth for history."""
+        day_seconds = {}
+        for session in self.sessions.load():
+            if session.get("date") != date_str:
+                continue
+            cat = session.get("category")
+            day_seconds[cat] = day_seconds.get(cat, 0) + int(session.get("duration", 0))
+
+        rows, fieldnames = self.report.load(self.data["categories"])
+        for cat in day_seconds:
+            if cat not in fieldnames:
+                fieldnames.append(cat)
+
+        row = rows.get(date_str, {"date": date_str})
+        for cat in fieldnames:
+            if cat == "date":
+                continue
+            row[cat] = time_utils.format_hms(day_seconds.get(cat, 0))
+        rows[date_str] = row
+        self.report.save(rows, fieldnames)
+
+        # today's dial total = finalized sessions today (just recomputed)
+        # plus whatever's still accumulating on the current live session.
+        if date_str == time_utils.current_logical_date_str():
+            for cat in self.data["categories"]:
+                self.data["totals"][cat] = day_seconds.get(cat, 0)
+            if self.active_cat not in self.data["totals"]:
+                self.data["totals"][self.active_cat] = day_seconds.get(self.active_cat, 0)
+            self.save_config()
+
+    def _push_undo(self, action, session_id, before, after):
+        self._undo_stack.append({
+            "action": action, "session_id": session_id, "before": before, "after": after,
+        })
+        if len(self._undo_stack) > MAX_UNDO_STEPS:
+            self._undo_stack.pop(0)
+        self.edit_log.record(action, session_id, before, after)
+
+    def update_gantt_session(self, session_id, start=None, end=None, category=None):
+        """Edit a session's start/end/category (used for both drag-resize
+        and typed-time edits in the Gantt view). Returns the updated
+        session, or None if session_id doesn't exist."""
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+
+        before = dict(session)
+        new_start = start or session["start"]
+        new_end = end or session["end"]
+
+        try:
+            start_dt = datetime.strptime(new_start, "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(new_end, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+        if end_dt <= start_dt:
+            return None
+
+        fields = {
+            "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": int((end_dt - start_dt).total_seconds()),
+            "date": time_utils.logical_date(start_dt).strftime("%Y-%m-%d"),
+        }
+        if category:
+            fields["category"] = category
+
+        old_date = session["date"]
+        updated = self.sessions.update(session_id, **fields)
+
+        self._resync_day(old_date)
+        if fields["date"] != old_date:
+            self._resync_day(fields["date"])
+
+        self._push_undo("update", session_id, before, dict(updated))
+        return updated
+
+    def delete_gantt_session(self, session_id):
+        session = self.sessions.get(session_id)
+        if session is None:
+            return {"status": "not_found"}
+
+        date_str = session["date"]
+        before = dict(session)
+        self.sessions.delete(session_id)
+        self._resync_day(date_str)
+
+        self._push_undo("delete", session_id, before, None)
+        return {"status": "deleted"}
+
+    def create_gantt_session(self, category, start, end):
+        try:
+            start_dt = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+        if end_dt <= start_dt or category not in self.data["categories"]:
+            return None
+
+        date_str = time_utils.logical_date(start_dt).strftime("%Y-%m-%d")
+        session_id = self.sessions.append({
+            "date": date_str,
+            "category": category,
+            "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration": int((end_dt - start_dt).total_seconds()),
+        })
+
+        self._resync_day(date_str)
+        created = self.sessions.get(session_id)
+
+        self._push_undo("create", session_id, None, dict(created))
+        return created
+
+    def undo_last_gantt_edit(self):
+        """Reverses the most recent create/update/delete made in this
+        session (in-memory stack; cleared on restart). Returns the
+        reversed entry's action, or None if there's nothing to undo."""
+        if not self._undo_stack:
+            return None
+
+        entry = self._undo_stack.pop()
+        action, session_id, before, after = (
+            entry["action"], entry["session_id"], entry["before"], entry["after"],
+        )
+        dates_to_resync = set()
+
+        if action == "create":
+            session = self.sessions.get(session_id)
+            if session:
+                dates_to_resync.add(session["date"])
+                self.sessions.delete(session_id)
+        elif action == "delete":
+            new_id = self.sessions.append(before)
+            dates_to_resync.add(before["date"])
+            session_id = new_id  # the restored record gets a new id
+        elif action == "update":
+            current = self.sessions.get(session_id)
+            if current:
+                dates_to_resync.add(current["date"])
+            self.sessions.update(session_id, **{k: v for k, v in before.items() if k != "id"})
+            dates_to_resync.add(before["date"])
+
+        for date_str in dates_to_resync:
+            self._resync_day(date_str)
+
+        self.edit_log.record(f"undo:{action}", session_id, after, before)
+        return action
 
     def _check_daily_reset(self):
         today = time_utils.logical_date(datetime.now())

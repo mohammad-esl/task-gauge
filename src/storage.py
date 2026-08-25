@@ -6,6 +6,7 @@ import os
 import re
 import json
 import csv
+import uuid
 from datetime import datetime, timedelta
 
 import time_utils
@@ -96,8 +97,10 @@ class HistoryLog:
 
 
 class SessionsStore:
-    """timer_sessions.json: structured session records, capped at the most
-    recent MAX_SESSIONS so the file doesn't grow forever."""
+    """timer_sessions.json: the source of truth for session records, each
+    identified by a stable "id" so individual sessions can be edited or
+    deleted. Capped at the most recent MAX_SESSIONS so the file doesn't
+    grow forever."""
 
     MAX_SESSIONS = 5000
 
@@ -116,21 +119,70 @@ class SessionsStore:
         try:
             with open(self.path, "r") as f:
                 data = json.load(f)
-                self._cache = data if isinstance(data, list) else []
+                sessions = data if isinstance(data, list) else []
         except Exception:
-            self._cache = []
+            sessions = []
 
+        changed = False
+        for session in sessions:
+            if "id" not in session:
+                session["id"] = uuid.uuid4().hex
+                changed = True
+
+        self._cache = sessions
+        if changed:
+            self._flush()
         return self._cache
 
+    def _flush(self):
+        with open(self.path, "w") as f:
+            json.dump(self._cache, f, indent=2)
+
     def append(self, session):
+        return self.append_many([session])[0]
+
+    def append_many(self, new_sessions):
+        """Append several sessions with a single disk write, e.g. for a
+        one-time bulk import. Returns the assigned ids in order."""
         sessions = self.load()
-        sessions.append(session)
+        ids = []
+        for session in new_sessions:
+            session = dict(session)
+            session.setdefault("id", uuid.uuid4().hex)
+            sessions.append(session)
+            ids.append(session["id"])
+
         if len(sessions) > self.MAX_SESSIONS:
             sessions = sessions[-self.MAX_SESSIONS:]
 
         self._cache = sessions
-        with open(self.path, "w") as f:
-            json.dump(sessions, f, indent=2)
+        self._flush()
+        return ids
+
+    def update(self, session_id, **fields):
+        sessions = self.load()
+        for session in sessions:
+            if session.get("id") == session_id:
+                session.update(fields)
+                self._flush()
+                return session
+        return None
+
+    def delete(self, session_id):
+        sessions = self.load()
+        remaining = [s for s in sessions if s.get("id") != session_id]
+        if len(remaining) == len(sessions):
+            return False
+
+        self._cache = remaining
+        self._flush()
+        return True
+
+    def get(self, session_id):
+        for session in self.load():
+            if session.get("id") == session_id:
+                return session
+        return None
 
 
 class DailyReportStore:

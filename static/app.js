@@ -190,12 +190,31 @@ function shiftGanttDay(direction) {
     loadGanttChart();
 }
 
+let ganttData = null;      // last report fetched from get_gantt_report
+let editingSessionId = null;
+let dragState = null;      // in-progress drag/resize/create, see startBlockDrag/startLaneCreate
+
 function loadGanttChart() {
+    if (dragState) return; // don't clobber the chart mid-drag
     const targetDate = logicalDateString(addDays(new Date(), ganttDateOffset));
     window.pywebview.api.get_gantt_report(targetDate).then(data => {
+        ganttData = data;
         document.getElementById('gantt-date').innerText = data.date;
         renderGantt(data);
     });
+}
+
+function minutesToTimeString(dateStr, minutes) {
+    // minutes is on the gantt's 0..1440 axis, where 0 = 06:00 of dateStr.
+    const base = new Date(`${dateStr}T06:00:00`);
+    base.setMinutes(base.getMinutes() + minutes);
+    const y = base.getFullYear();
+    const m = String(base.getMonth() + 1).padStart(2, '0');
+    const d = String(base.getDate()).padStart(2, '0');
+    const hh = String(base.getHours()).padStart(2, '0');
+    const mm = String(base.getMinutes()).padStart(2, '0');
+    const ss = String(base.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
 }
 
 function renderGantt(data) {
@@ -203,12 +222,6 @@ function renderGantt(data) {
     chart.innerHTML = '';
 
     const sessions = data.sessions || [];
-    const chartCategories = data.categories.filter(cat => sessions.some(s => s.category === cat));
-
-    if (sessions.length === 0) {
-        chart.innerHTML = '<div class="gantt-empty">No sessions recorded for this day yet.</div>';
-        return;
-    }
 
     const axis = document.createElement('div');
     axis.className = 'gantt-axis';
@@ -221,7 +234,14 @@ function renderGantt(data) {
     });
     chart.appendChild(axis);
 
-    chartCategories.forEach(cat => {
+    const rowCategories = data.categories.filter(cat => cat !== 'Nothing' && sessions.some(s => s.category === cat));
+
+    if (rowCategories.length === 0) {
+        chart.innerHTML += '<div class="gantt-empty">No sessions recorded for this day yet. Drag on a category\'s row (once it has one) to add more, or use STATS/EDIT to add tasks.</div>';
+        return;
+    }
+
+    rowCategories.forEach(cat => {
         const row = document.createElement('div');
         row.className = 'gantt-row';
 
@@ -232,24 +252,11 @@ function renderGantt(data) {
 
         const lane = document.createElement('div');
         lane.className = 'gantt-lane';
+        lane.dataset.category = cat;
+        lane.addEventListener('mousedown', onLaneMouseDown);
 
         sessions.filter(s => s.category === cat).forEach(s => {
-            const startMin = Math.max(0, Math.min(1440, timeToTimelineMinutes(s.start)));
-            let endMin = Math.max(0, Math.min(1440, timeToTimelineMinutes(s.end)));
-            if (endMin <= startMin) {
-                endMin = 1440;
-            }
-            const left = (startMin / 1440) * 100;
-            const width = Math.max(0.25, ((endMin - startMin) / 1440) * 100);
-            const colorIndex = Math.max(0, data.categories.indexOf(cat) - 1);
-
-            const block = document.createElement('div');
-            block.className = 'gantt-block';
-            block.style.left = `${left}%`;
-            block.style.width = `${width}%`;
-            block.style.background = chartColors[colorIndex % chartColors.length];
-            block.title = `${cat}\n${displayTime(s.start)} → ${displayTime(s.end)}\n${secondsToLabel(s.duration || 0)}${s.live ? ' / live' : ''}`;
-            lane.appendChild(block);
+            lane.appendChild(buildGanttBlock(s, data));
         });
 
         row.appendChild(label);
@@ -257,6 +264,265 @@ function renderGantt(data) {
         chart.appendChild(row);
     });
 }
+
+function buildGanttBlock(s, data) {
+    const startMin = Math.max(0, Math.min(1440, timeToTimelineMinutes(s.start)));
+    let endMin = Math.max(0, Math.min(1440, timeToTimelineMinutes(s.end)));
+    if (endMin <= startMin) {
+        endMin = 1440;
+    }
+    const left = (startMin / 1440) * 100;
+    const width = Math.max(0.25, ((endMin - startMin) / 1440) * 100);
+    const colorIndex = Math.max(0, data.categories.indexOf(s.category) - 1);
+
+    const block = document.createElement('div');
+    block.className = 'gantt-block' + (s.live ? ' live' : '') + (s.clipped ? ' clipped' : '');
+    block.style.left = `${left}%`;
+    block.style.width = `${width}%`;
+    block.style.background = chartColors[colorIndex % chartColors.length];
+    block.title = `${s.category}\n${displayTime(s.start)} → ${displayTime(s.end)}\n${secondsToLabel(s.duration || 0)}${s.live ? ' / live' : ''}${s.clipped ? '\n(continues past this day)' : ''}`;
+    block.dataset.sessionId = s.session_id || '';
+
+    if (s.live || !s.session_id) {
+        return block; // the in-progress session isn't editable here
+    }
+
+    const leftHandle = document.createElement('div');
+    leftHandle.className = 'gantt-handle left';
+    const rightHandle = document.createElement('div');
+    rightHandle.className = 'gantt-handle right';
+    block.appendChild(leftHandle);
+    block.appendChild(rightHandle);
+
+    leftHandle.addEventListener('mousedown', e => { e._ganttHandled = true; startBlockDrag(e, s, 'resize-left'); });
+    rightHandle.addEventListener('mousedown', e => { e._ganttHandled = true; startBlockDrag(e, s, 'resize-right'); });
+    block.addEventListener('mousedown', e => {
+        if (e._ganttHandled) return;
+        e._ganttHandled = true;
+        startBlockDrag(e, s, 'move');
+    });
+    block.addEventListener('dblclick', e => {
+        e.stopPropagation();
+        openSessionEditor(s);
+    });
+
+    return block;
+}
+
+function laneMinutesFromEvent(lane, clientX) {
+    const rect = lane.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return Math.round(ratio * 1440);
+}
+
+function startBlockDrag(e, session, mode) {
+    e.preventDefault();
+    e.stopPropagation();
+    const blockEl = document.querySelector(`.gantt-block[data-session-id="${session.session_id}"]`);
+    const lane = blockEl.parentElement;
+
+    dragState = {
+        mode,
+        session,
+        lane,
+        blockEl,
+        startClientX: e.clientX,
+        origStartMin: timeToTimelineMinutes(session.start),
+        origEndMin: timeToTimelineMinutes(session.end),
+        targetCategory: session.category, // only changes for mode === 'move'
+    };
+    blockEl.classList.add('dragging');
+
+    window.addEventListener('mousemove', onBlockDragMove);
+    window.addEventListener('mouseup', onBlockDragEnd);
+}
+
+const MIN_SESSION_MINUTES = 5; // keeps rounding to whole minutes from ever producing end <= start
+
+function laneUnderPoint(clientX, clientY) {
+    const el = document.elementFromPoint(clientX, clientY);
+    return el ? el.closest('.gantt-lane') : null;
+}
+
+function onBlockDragMove(e) {
+    if (!dragState) return;
+    const { mode, blockEl, startClientX, origStartMin, origEndMin } = dragState;
+    const rect = dragState.lane.getBoundingClientRect();
+    const deltaMin = Math.round(((e.clientX - startClientX) / rect.width) * 1440);
+
+    let newStart = origStartMin;
+    let newEnd = origEndMin;
+
+    if (mode === 'move') {
+        const span = origEndMin - origStartMin;
+        newStart = Math.max(0, Math.min(1440 - span, origStartMin + deltaMin));
+        newEnd = newStart + span;
+
+        // Vertical drag between rows re-targets the block at a different
+        // category/lane; horizontal position stays computed against the
+        // lane currently under the cursor.
+        const hoverLane = laneUnderPoint(e.clientX, e.clientY);
+        if (hoverLane && hoverLane !== blockEl.parentElement) {
+            hoverLane.appendChild(blockEl);
+            dragState.targetCategory = hoverLane.dataset.category;
+        }
+    } else if (mode === 'resize-left') {
+        newStart = Math.max(0, Math.min(origEndMin - MIN_SESSION_MINUTES, origStartMin + deltaMin));
+    } else if (mode === 'resize-right') {
+        newEnd = Math.min(1440, Math.max(origStartMin + MIN_SESSION_MINUTES, origEndMin + deltaMin));
+    }
+
+    dragState.newStartMin = newStart;
+    dragState.newEndMin = newEnd;
+
+    blockEl.style.left = `${(newStart / 1440) * 100}%`;
+    blockEl.style.width = `${Math.max(0.25, ((newEnd - newStart) / 1440) * 100)}%`;
+    blockEl.title = `${dragState.targetCategory}\n${displayTime(minutesToTimeString(ganttData.date, newStart))} → ${displayTime(minutesToTimeString(ganttData.date, newEnd))}`;
+}
+
+function onBlockDragEnd() {
+    if (!dragState) return;
+    const { session, blockEl, newStartMin, newEndMin, targetCategory } = dragState;
+    window.removeEventListener('mousemove', onBlockDragMove);
+    window.removeEventListener('mouseup', onBlockDragEnd);
+    blockEl.classList.remove('dragging');
+
+    const timeMoved = newStartMin !== undefined && (newStartMin !== dragState.origStartMin || newEndMin !== dragState.origEndMin);
+    const categoryChanged = targetCategory !== session.category;
+    dragState = null;
+
+    if (!timeMoved && !categoryChanged) return;
+
+    const newStart = minutesToTimeString(ganttData.date, newStartMin);
+    const newEnd = minutesToTimeString(ganttData.date, newEndMin);
+    const categoryArg = categoryChanged ? targetCategory : null;
+    window.pywebview.api.update_gantt_session(session.session_id, newStart, newEnd, categoryArg).then(result => {
+        if (!result) {
+            alert('Could not update the session (end must be after start).');
+        }
+        loadGanttChart();
+    });
+}
+
+function onLaneMouseDown(e) {
+    if (e._ganttHandled) return; // a block/handle already started its own drag
+    if (e.target !== e.currentTarget) return; // ignore clicks that started on a block
+    e.preventDefault();
+    const lane = e.currentTarget;
+    const startMin = laneMinutesFromEvent(lane, e.clientX);
+
+    const draft = document.createElement('div');
+    draft.className = 'gantt-draft';
+    draft.style.left = `${(startMin / 1440) * 100}%`;
+    draft.style.width = '0%';
+    lane.appendChild(draft);
+
+    dragState = { mode: 'create', lane, draft, startMin, currentMin: startMin };
+
+    window.addEventListener('mousemove', onLaneCreateMove);
+    window.addEventListener('mouseup', onLaneCreateEnd);
+}
+
+function onLaneCreateMove(e) {
+    if (!dragState || dragState.mode !== 'create') return;
+    const { lane, draft, startMin } = dragState;
+    const currentMin = laneMinutesFromEvent(lane, e.clientX);
+    dragState.currentMin = currentMin;
+
+    const lo = Math.min(startMin, currentMin);
+    const hi = Math.max(startMin, currentMin);
+    draft.style.left = `${(lo / 1440) * 100}%`;
+    draft.style.width = `${Math.max(0.25, ((hi - lo) / 1440) * 100)}%`;
+}
+
+function onLaneCreateEnd() {
+    if (!dragState || dragState.mode !== 'create') return;
+    const { lane, draft, startMin, currentMin } = dragState;
+    window.removeEventListener('mousemove', onLaneCreateMove);
+    window.removeEventListener('mouseup', onLaneCreateEnd);
+    draft.remove();
+    dragState = null;
+
+    const lo = Math.min(startMin, currentMin);
+    const hi = Math.max(startMin, currentMin);
+    if (hi - lo < 2) return; // treat as a stray click, not a create-drag
+
+    const category = lane.dataset.category;
+    const start = minutesToTimeString(ganttData.date, lo);
+    const end = minutesToTimeString(ganttData.date, hi);
+
+    window.pywebview.api.create_gantt_session(category, start, end).then(result => {
+        if (!result) {
+            alert('Could not create the session.');
+        }
+        loadGanttChart();
+    });
+}
+
+function openSessionEditor(session) {
+    editingSessionId = session.session_id;
+
+    const select = document.getElementById('edit-category');
+    select.innerHTML = (ganttData.categories || []).filter(c => c !== 'Nothing')
+        .map(c => `<option value="${c}"${c === session.category ? ' selected' : ''}>${c}</option>`).join('');
+
+    document.getElementById('edit-start').value = session.start;
+    document.getElementById('edit-end').value = session.end;
+    document.getElementById('edit-error').innerText = session.clipped
+        ? 'This block continues past this day; editing changes the full session.'
+        : '';
+
+    document.getElementById('session-edit-panel').style.display = 'block';
+}
+
+function closeSessionEditor() {
+    document.getElementById('session-edit-panel').style.display = 'none';
+    editingSessionId = null;
+}
+
+function submitSessionEdit() {
+    const category = document.getElementById('edit-category').value;
+    const start = document.getElementById('edit-start').value.trim();
+    const end = document.getElementById('edit-end').value.trim();
+    const errorEl = document.getElementById('edit-error');
+
+    window.pywebview.api.update_gantt_session(editingSessionId, start, end, category).then(result => {
+        if (!result) {
+            errorEl.innerText = 'Invalid times — make sure the format is YYYY-MM-DD HH:MM:SS and end is after start.';
+            return;
+        }
+        closeSessionEditor();
+        loadGanttChart();
+    });
+}
+
+function deleteSessionFromEditor() {
+    if (!editingSessionId) return;
+
+    window.pywebview.api.delete_gantt_session(editingSessionId).then(() => {
+        closeSessionEditor();
+        loadGanttChart();
+    });
+}
+
+function undoGanttEdit() {
+    window.pywebview.api.undo_last_gantt_edit().then(action => {
+        if (!action) return; // nothing to undo
+        loadGanttChart();
+    });
+}
+
+document.addEventListener('keydown', e => {
+    const gantt = document.getElementById('gantt-panel');
+    if (gantt.style.display !== 'block') return;
+    // e.code is the physical key position (KeyZ), so this works regardless
+    // of keyboard layout (e.g. Persian), unlike e.key which reflects the
+    // typed character.
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+        e.preventDefault();
+        undoGanttEdit();
+    }
+});
 
 function resetCurrent() {
     if(confirm("Reset current session?")) window.pywebview.api.reset_timer();
