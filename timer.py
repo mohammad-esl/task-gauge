@@ -17,6 +17,13 @@ class TimerApi:
         self.last_report_save = time.time()
         self.report_save_interval = 300  # 5 minutes
 
+        # In-memory caches to avoid re-reading/rewriting files on every poll.
+        self._history_cache = None       # list parsed from timer_history.txt
+        self._history_mtime = None       # mtime of timer_history.txt when cached
+        self._sessions_cache = None      # list loaded from timer_sessions.json
+        self._report_rows_cache = None   # {date_str: row} loaded from daily_report.csv
+        self._report_fieldnames_cache = None
+
         # Default data
         self.data = {
             "categories": ["Nothing", "Education", "Work", "Study", "Project 1"],
@@ -80,9 +87,11 @@ class TimerApi:
         self.start_time = end_ts
         return duration
 
-    def _add_duration_to_daily_report(self, date_str, category, duration):
-        if duration <= 0:
-            return
+    def _load_report_rows(self):
+        """Load daily_report.csv into memory once, reusing it across calls
+        until it's written again (via _write_report_rows)."""
+        if self._report_rows_cache is not None:
+            return self._report_rows_cache, self._report_fieldnames_cache
 
         rows = []
         fieldnames = ["date"] + self.data["categories"]
@@ -97,6 +106,27 @@ class TimerApi:
                         fieldnames.append(field)
 
         existing = {row["date"]: row for row in rows if "date" in row}
+        self._report_rows_cache = existing
+        self._report_fieldnames_cache = fieldnames
+        return existing, fieldnames
+
+    def _write_report_rows(self, existing, fieldnames):
+        self._report_rows_cache = existing
+        self._report_fieldnames_cache = fieldnames
+
+        with open(self.report_file, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(existing.values())
+
+    def _add_duration_to_daily_report(self, date_str, category, duration):
+        if duration <= 0:
+            return
+
+        existing, fieldnames = self._load_report_rows()
+        if category not in fieldnames:
+            fieldnames.append(category)
+
         row = existing.get(date_str, {"date": date_str})
 
         for cat in fieldnames:
@@ -113,10 +143,7 @@ class TimerApi:
         row[category] = self._format_hms(current_seconds + duration)
         existing[date_str] = row
 
-        with open(self.report_file, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(existing.values())
+        self._write_report_rows(existing, fieldnames)
 
     def _align_active_session_to_logical_day(self):
         if not hasattr(self, "active_cat") or not hasattr(self, "start_time"):
@@ -139,17 +166,22 @@ class TimerApi:
         self.start_time = rollover_ts
         self.save_config()
 
+    _HISTORY_PATTERN = re.compile(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*\|\s*"
+        r"(?:\[(?:TASK|BREAK)\]\s*)?"
+        r"(.+?)\s*\|\s*Session:\s*"
+        r"(\d+)h\s+(\d+)m\s+(\d+)s"
+    )
+
     def _load_history_sessions(self):
         if not os.path.exists(self.log_file):
             return []
 
+        mtime = os.path.getmtime(self.log_file)
+        if self._history_cache is not None and self._history_mtime == mtime:
+            return self._history_cache
+
         sessions = []
-        pattern = re.compile(
-            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*\|\s*"
-            r"(?:\[(?:TASK|BREAK)\]\s*)?"
-            r"(.+?)\s*\|\s*Session:\s*"
-            r"(\d+)h\s+(\d+)m\s+(\d+)s"
-        )
 
         try:
             with open(self.log_file, "r", encoding="utf-8") as f:
@@ -158,7 +190,7 @@ class TimerApi:
             return []
 
         for line in lines:
-            match = pattern.search(line)
+            match = self._HISTORY_PATTERN.search(line)
             if not match:
                 continue
 
@@ -184,6 +216,8 @@ class TimerApi:
                 "source": "history",
             })
 
+        self._history_cache = sessions
+        self._history_mtime = mtime
         return sessions
 
     def _clip_session_to_day(self, session, date_str):
@@ -209,20 +243,24 @@ class TimerApi:
         return clipped
 
     def _load_sessions(self):
+        if self._sessions_cache is not None:
+            return self._sessions_cache
+
         if not os.path.exists(self.sessions_file):
-            return []
+            self._sessions_cache = []
+            return self._sessions_cache
 
         try:
             with open(self.sessions_file, "r") as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    return data
+                self._sessions_cache = data if isinstance(data, list) else []
         except Exception:
-            pass
+            self._sessions_cache = []
 
-        return []
+        return self._sessions_cache
 
     def _save_sessions(self, sessions):
+        self._sessions_cache = sessions
         with open(self.sessions_file, "w") as f:
             json.dump(sessions, f, indent=2)
 
@@ -265,19 +303,7 @@ class TimerApi:
 
     def _save_daily_report(self, date_str):
         totals = self._get_live_totals()
-        rows = []
-        fieldnames = ["date"] + self.data["categories"]
-
-        if os.path.exists(self.report_file):
-            with open(self.report_file, "r", newline="") as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-
-                for field in reader.fieldnames or []:
-                    if field not in fieldnames:
-                        fieldnames.append(field)
-
-        existing = {row["date"]: row for row in rows if "date" in row}
+        existing, fieldnames = self._load_report_rows()
 
         row = {"date": date_str}
         for cat in fieldnames:
@@ -286,11 +312,7 @@ class TimerApi:
             row[cat] = self._format_hms(totals.get(cat, 0))
 
         existing[date_str] = row
-
-        with open(self.report_file, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(existing.values())
+        self._write_report_rows(existing, fieldnames)
 
     def get_today_report(self):
         self._check_daily_reset()
@@ -313,12 +335,7 @@ class TimerApi:
         start_of_week = start_of_week + timedelta(weeks=int(week_offset))
         end_of_week = start_of_week + timedelta(days=6)
 
-        rows = {}
-        if os.path.exists(self.report_file):
-            with open(self.report_file, "r", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    rows[row["date"]] = row
+        rows, _ = self._load_report_rows()
 
         days = []
         for i in range(7):
@@ -913,12 +930,17 @@ html_content = """
                 window.pywebview.api.get_status().then(s => {
                     document.getElementById('session-time').innerText = format(s.session);
                     document.getElementById('total-time').innerText = format(s.total, true);
-                    if (document.getElementById('gantt-panel').style.display === 'block') {
-                        loadGanttChart();
-                    }
                 });
             }
         }, 1000);
+
+        // The Gantt chart only needs a periodic refresh (it re-parses history
+        // on the Python side), not a full-second tick like the live timer.
+        setInterval(() => {
+            if (window.pywebview.api && document.getElementById('gantt-panel').style.display === 'block') {
+                loadGanttChart();
+            }
+        }, 5000);
     </script>
 </body>
 </html>
