@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="settings-panel">
+        <h4 style="margin:0 0 10px 0; color:var(--accent); letter-spacing:1px">DASHBOARD</h4>
+        <table class="stats-table" id="history-table"></table>
+
+        <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">WEEKLY VIEW</h5>
+        <div style="display:flex; gap:6px; margin-bottom:10px;">
+            <button class="icon-btn" onclick="changeWeek(-1)">← PREV</button>
+            <button class="icon-btn" onclick="changeWeek(0)">THIS WEEK</button>
+            <button class="icon-btn" onclick="changeWeek(1)">NEXT →</button>
+        </div>
+
+        <div id="week-label" style="font-size:11px; color:#777; margin-bottom:8px;"></div>
+        <div id="week-chart"></div>
+        <div id="week-legend" class="legend"></div>
+
+        <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">EDIT TASKS (One per line)</h5>
+        <textarea id="cat-input" placeholder="Enter tasks..."></textarea>
+        <button class="save-btn" onclick="saveSettings()">APPLY CHANGES</button>
+        <button class="save-btn" style="background:#222; color:#777" onclick="toggleSettings()">CLOSE</button>
+    </div>
+
+    <div id="gantt-panel">
+        <div class="gantt-toolbar">
+            <h4 style="margin:0; color:var(--accent); letter-spacing:1px">GANTT / TIMELINE VIEW</h4>
+            <div style="display:flex; gap:6px;">
+                <button class="icon-btn" onclick="shiftGanttDay(-1)">← PREV DAY</button>
+                <button class="icon-btn" onclick="shiftGanttDay(0)">TODAY</button>
+                <button class="icon-btn" onclick="shiftGanttDay(1)">NEXT DAY →</button>
+            </div>
+        </div>
+        <div id="gantt-date" class="gantt-date"></div>
+        <div id="gantt-chart" class="gantt-frame"></div>
+        <button class="save-btn" style="background:#222; color:#777" onclick="toggleGantt()">CLOSE</button>
+    </div>
+
+    <div class="main-container" id="app-ui">
+        <svg id="hit-surface" viewBox="0 0 100 100"></svg>
+        <div id="hub"><div class="needle"></div></div>
+        <div class="center-display">
+            <div id="session-time" onclick="toggleSettings()">00:00</div>
+            <div class="total-box">TOTAL <span id="total-time">00:00:00</span></div>
+            <div class="controls">
+                <button class="icon-btn" onclick="toggleSettings()">STATS/EDIT</button>
+                <button class="icon-btn" onclick="toggleGantt()">GANTT</button>
+                <button class="icon-btn" onclick="resetCurrent()" style="color:var(--red)">RESET</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
