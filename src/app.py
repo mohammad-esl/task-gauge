@@ -23,6 +23,7 @@ else:
     DATA_DIR = os.path.join(SRC_DIR, "..", "data")
 
 LOCK_FILE = os.path.join(DATA_DIR, "timer.lock")
+ICON_FILE = os.path.join(STATIC_DIR, "assets", "icon.ico")
 
 
 def main():
@@ -41,7 +42,7 @@ def main():
             height=740,
             resizable=False,
         )
-        webview.start(gui='edgechromium')
+        webview.start(gui='edgechromium', icon=ICON_FILE if os.path.isfile(ICON_FILE) else None)
     finally:
         single_instance.release(LOCK_FILE)
 

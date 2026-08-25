@@ -7,6 +7,7 @@ REM After rebuilding, your data\ folder next to the exe is untouched.
   --name "TaskGaugePro" ^
   --onedir ^
   --windowed ^
+  --icon "d:\category2_Self_Development\Timer_app\static\assets\icon.ico" ^
   --add-data "d:\category2_Self_Development\Timer_app\static;static" ^
   --distpath "dist" ^
   --workpath "build" ^
