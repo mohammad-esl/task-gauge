@@ -45,18 +45,23 @@ Timer_app/
 The app is distributed as a built Windows executable — it's no longer run
 as a raw Python script. Double-click `run.bat` (or the desktop/Startup
 shortcut), which launches `dist/TaskGaugePro/TaskGaugePro.exe` directly.
-`data/` next to the exe holds your tracking data and persists across
-rebuilds.
+This is the only thing you need day-to-day; `build.bat` is a source-only
+tool for when you change the code.
 
-### Building the exe from source
+### Rebuilding the exe after a code change
 
 ```bash
 build.bat
 ```
 
 This uses PyInstaller (from the `TimeTracker` conda env) to rebuild
-`dist/TaskGaugePro/TaskGaugePro.exe` from `src/` and `static/`. Your
-`data/` folder next to the exe is left untouched by a rebuild.
+`dist/TaskGaugePro/TaskGaugePro.exe` from `src/` and `static/`.
+
+**Warning:** this deletes and recreates the whole `dist/TaskGaugePro/`
+folder, which wipes the `data/` directory living next to the exe. Before
+rebuilding, copy `data/` (the project-root one, which is the durable copy)
+somewhere safe, then restore it into `dist/TaskGaugePro/data/` after the
+build finishes.
 
 ### Running from source (development only)
 
