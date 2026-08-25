@@ -2,6 +2,7 @@
 pywebview window pointed at the static frontend."""
 import os
 import sys
+import time
 
 import webview
 
@@ -42,6 +43,16 @@ def main():
             height=740,
             resizable=False,
         )
+
+        def save_on_close():
+            # Without this, closing the window loses whatever time has
+            # accumulated on the active session since the last save
+            # (category switch, day rollover, or the 5-minute autosave).
+            api._finalize_active_session(time.time())
+            api.save_config()
+
+        window.events.closing += save_on_close
+
         webview.start(gui='edgechromium', icon=ICON_FILE if os.path.isfile(ICON_FILE) else None)
     finally:
         single_instance.release(LOCK_FILE)
