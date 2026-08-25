@@ -165,6 +165,16 @@ function toggleSettings() {
     ui.className = isVisible ? 'main-container' : 'main-container blur';
 }
 
+let dualTaskMode = false;
+
+function toggleDualTaskMode() {
+    window.pywebview.api.set_dual_task_mode(!dualTaskMode).then(result => {
+        dualTaskMode = result.dual_task_mode;
+        document.getElementById('dual-task-btn').classList.toggle('active-toggle', dualTaskMode);
+        window.pywebview.api.get_status().then(s => applyActiveState(s.active, s.active_2));
+    });
+}
+
 function toggleGantt() {
     const panel = document.getElementById('gantt-panel');
     const settings = document.getElementById('settings-panel');
@@ -338,24 +348,98 @@ function startBlockDrag(e, session, mode) {
 }
 
 const MIN_SESSION_MINUTES = 5; // keeps rounding to whole minutes from ever producing end <= start
+const SNAP_MINUTES = 5;        // drag/resize snaps to this grid
 
 function laneUnderPoint(clientX, clientY) {
     const el = document.elementFromPoint(clientX, clientY);
     return el ? el.closest('.gantt-lane') : null;
 }
 
+function snapMinutes(min) {
+    return Math.round(min / SNAP_MINUTES) * SNAP_MINUTES;
+}
+
+// Other sessions in the same category today, excluding the one being
+// dragged, as [startMin, endMin] pairs on the gantt's 0..1440 axis.
+function neighborRangesForCategory(category, excludeSessionId) {
+    return (ganttData.sessions || [])
+        .filter(s => s.category === category && s.session_id !== excludeSessionId && !s.live)
+        .map(s => [timeToTimelineMinutes(s.start), timeToTimelineMinutes(s.end)])
+        .filter(([s, e]) => e > s);
+}
+
+// Clamps [start, end] so it doesn't overlap any neighbor range. Resizing
+// simply can't push the moving edge past the nearest neighbor edge in its
+// direction of travel. Moving preserves the original span and slides the
+// whole block to sit flush against whichever neighbor it collided with,
+// picking the neighbor that requires the smallest correction.
+function clampAgainstNeighbors(start, end, neighbors, mode, origStart, origEnd) {
+    if (mode === 'resize-left') {
+        // The right edge (end) is fixed; can't drag start past the end of
+        // any neighbor that lies to the left of (or overlaps) our fixed end.
+        for (const [, nEnd] of neighbors) {
+            if (nEnd <= end && nEnd > start) start = Math.max(start, nEnd);
+        }
+        return [start, end];
+    }
+    if (mode === 'resize-right') {
+        // The left edge (start) is fixed; can't drag end past the start of
+        // any neighbor that lies to the right of (or overlaps) our fixed start.
+        for (const [nStart] of neighbors) {
+            if (nStart >= start && nStart < end) end = Math.min(end, nStart);
+        }
+        return [start, end];
+    }
+
+    // move: find every neighbor we currently overlap, compute the minimal
+    // slide (left or right) needed to clear each one, and apply whichever
+    // single slide clears all of them (checked by re-validating after).
+    const span = end - start;
+    let candidateStart = start;
+    let bestCorrection = null;
+
+    for (const [nStart, nEnd] of neighbors) {
+        const overlaps = start < nEnd && end > nStart;
+        if (!overlaps) continue;
+        const pushRightStart = nEnd;               // slide so our start sits at neighbor's end
+        const pushLeftStart = nStart - span;        // slide so our end sits at neighbor's start
+        const distRight = Math.abs(pushRightStart - start);
+        const distLeft = Math.abs(pushLeftStart - start);
+        const chosen = distRight <= distLeft ? pushRightStart : pushLeftStart;
+        if (bestCorrection === null || Math.abs(chosen - start) < Math.abs(bestCorrection - start)) {
+            bestCorrection = chosen;
+        }
+    }
+
+    if (bestCorrection !== null) {
+        candidateStart = Math.max(0, Math.min(1440 - span, bestCorrection));
+    }
+
+    // Re-check: the chosen slide might still collide with another neighbor
+    // (tightly packed rows) — if so, fall back to not moving at all.
+    let candidateEnd = candidateStart + span;
+    const stillOverlaps = neighbors.some(([nStart, nEnd]) => candidateStart < nEnd && candidateEnd > nStart);
+    if (stillOverlaps) {
+        candidateStart = origStart;
+        candidateEnd = origEnd;
+    }
+
+    return [candidateStart, candidateEnd];
+}
+
 function onBlockDragMove(e) {
     if (!dragState) return;
-    const { mode, blockEl, startClientX, origStartMin, origEndMin } = dragState;
+    const { mode, blockEl, startClientX, origStartMin, origEndMin, session } = dragState;
     const rect = dragState.lane.getBoundingClientRect();
     const deltaMin = Math.round(((e.clientX - startClientX) / rect.width) * 1440);
 
     let newStart = origStartMin;
     let newEnd = origEndMin;
+    let targetCategory = dragState.targetCategory;
 
     if (mode === 'move') {
         const span = origEndMin - origStartMin;
-        newStart = Math.max(0, Math.min(1440 - span, origStartMin + deltaMin));
+        newStart = snapMinutes(Math.max(0, Math.min(1440 - span, origStartMin + deltaMin)));
         newEnd = newStart + span;
 
         // Vertical drag between rows re-targets the block at a different
@@ -364,20 +448,24 @@ function onBlockDragMove(e) {
         const hoverLane = laneUnderPoint(e.clientX, e.clientY);
         if (hoverLane && hoverLane !== blockEl.parentElement) {
             hoverLane.appendChild(blockEl);
-            dragState.targetCategory = hoverLane.dataset.category;
+            targetCategory = hoverLane.dataset.category;
+            dragState.targetCategory = targetCategory;
         }
     } else if (mode === 'resize-left') {
-        newStart = Math.max(0, Math.min(origEndMin - MIN_SESSION_MINUTES, origStartMin + deltaMin));
+        newStart = snapMinutes(Math.max(0, Math.min(origEndMin - MIN_SESSION_MINUTES, origStartMin + deltaMin)));
     } else if (mode === 'resize-right') {
-        newEnd = Math.min(1440, Math.max(origStartMin + MIN_SESSION_MINUTES, origEndMin + deltaMin));
+        newEnd = snapMinutes(Math.min(1440, Math.max(origStartMin + MIN_SESSION_MINUTES, origEndMin + deltaMin)));
     }
+
+    const neighbors = neighborRangesForCategory(targetCategory, session.session_id);
+    [newStart, newEnd] = clampAgainstNeighbors(newStart, newEnd, neighbors, mode, origStartMin, origEndMin);
 
     dragState.newStartMin = newStart;
     dragState.newEndMin = newEnd;
 
     blockEl.style.left = `${(newStart / 1440) * 100}%`;
     blockEl.style.width = `${Math.max(0.25, ((newEnd - newStart) / 1440) * 100)}%`;
-    blockEl.title = `${dragState.targetCategory}\n${displayTime(minutesToTimeString(ganttData.date, newStart))} → ${displayTime(minutesToTimeString(ganttData.date, newEnd))}`;
+    blockEl.title = `${targetCategory}\n${displayTime(minutesToTimeString(ganttData.date, newStart))} → ${displayTime(minutesToTimeString(ganttData.date, newEnd))}`;
 }
 
 function onBlockDragEnd() {
@@ -409,7 +497,7 @@ function onLaneMouseDown(e) {
     if (e.target !== e.currentTarget) return; // ignore clicks that started on a block
     e.preventDefault();
     const lane = e.currentTarget;
-    const startMin = laneMinutesFromEvent(lane, e.clientX);
+    const startMin = snapMinutes(laneMinutesFromEvent(lane, e.clientX));
 
     const draft = document.createElement('div');
     draft.className = 'gantt-draft';
@@ -426,25 +514,30 @@ function onLaneMouseDown(e) {
 function onLaneCreateMove(e) {
     if (!dragState || dragState.mode !== 'create') return;
     const { lane, draft, startMin } = dragState;
-    const currentMin = laneMinutesFromEvent(lane, e.clientX);
+    const currentMin = snapMinutes(laneMinutesFromEvent(lane, e.clientX));
     dragState.currentMin = currentMin;
 
-    const lo = Math.min(startMin, currentMin);
-    const hi = Math.max(startMin, currentMin);
+    let lo = Math.min(startMin, currentMin);
+    let hi = Math.max(startMin, currentMin);
+    const neighbors = neighborRangesForCategory(lane.dataset.category, null);
+    [lo, hi] = clampAgainstNeighbors(lo, hi, neighbors, startMin <= currentMin ? 'resize-right' : 'resize-left');
+
+    dragState.clampedLo = lo;
+    dragState.clampedHi = hi;
     draft.style.left = `${(lo / 1440) * 100}%`;
     draft.style.width = `${Math.max(0.25, ((hi - lo) / 1440) * 100)}%`;
 }
 
 function onLaneCreateEnd() {
     if (!dragState || dragState.mode !== 'create') return;
-    const { lane, draft, startMin, currentMin } = dragState;
+    const { lane, draft, clampedLo, clampedHi } = dragState;
     window.removeEventListener('mousemove', onLaneCreateMove);
     window.removeEventListener('mouseup', onLaneCreateEnd);
     draft.remove();
     dragState = null;
 
-    const lo = Math.min(startMin, currentMin);
-    const hi = Math.max(startMin, currentMin);
+    const lo = clampedLo ?? 0;
+    const hi = clampedHi ?? 0;
     if (hi - lo < 2) return; // treat as a stray click, not a create-drag
 
     const category = lane.dataset.category;
@@ -488,7 +581,7 @@ function submitSessionEdit() {
 
     window.pywebview.api.update_gantt_session(editingSessionId, start, end, category).then(result => {
         if (!result) {
-            errorEl.innerText = 'Invalid times — make sure the format is YYYY-MM-DD HH:MM:SS and end is after start.';
+            errorEl.innerText = 'Invalid times — check the format (YYYY-MM-DD HH:MM:SS), that end is after start, and that it doesn\'t overlap another session in this category.';
             return;
         }
         closeSessionEditor();
@@ -534,19 +627,22 @@ function saveSettings() {
     toggleSettings();
 }
 
+let catStep = 0;
+const hub2 = document.getElementById('hub-2');
+
 function initUI(data) {
     cats = data.categories;
     svg.innerHTML = '';
     document.querySelectorAll('.label').forEach(e => e.remove());
-    const step = 360 / cats.length;
+    catStep = 360 / cats.length;
     cats.forEach((name, i) => {
-        const centerAngle = i * step;
-        const sRad = (centerAngle - step/2 - 90) * Math.PI / 180, eRad = (centerAngle + step/2 - 90) * Math.PI / 180;
+        const centerAngle = i * catStep;
+        const sRad = (centerAngle - catStep/2 - 90) * Math.PI / 180, eRad = (centerAngle + catStep/2 - 90) * Math.PI / 180;
         const x1 = 50 + 50 * Math.cos(sRad), y1 = 50 + 50 * Math.sin(sRad), x2 = 50 + 50 * Math.cos(eRad), y2 = 50 + 50 * Math.sin(eRad);
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", `M 50 50 L ${x1} ${y1} A 50 50 0 0 1 ${x2} ${y2} Z`);
         path.setAttribute("class", "slice");
-        path.onclick = () => select(name, centerAngle);
+        path.onclick = (e) => select(name, e.ctrlKey || e.metaKey);
         svg.appendChild(path);
         const label = document.createElement('div');
         label.className = 'label';
@@ -557,17 +653,39 @@ function initUI(data) {
         label.style.top = (260 + 210 * Math.sin(rad) - 10) + 'px';
         document.getElementById('app-ui').appendChild(label);
     });
-    const activeIdx = cats.indexOf(data.active);
-    select(data.active, activeIdx * step);
+    dualTaskMode = !!data.dual_task_mode;
+    document.getElementById('dual-task-btn').classList.toggle('active-toggle', dualTaskMode);
+    applyActiveState(data.active, data.active_2);
 }
 
 window.addEventListener('pywebviewready', () => window.pywebview.api.get_init_data().then(initUI));
 
-function select(name, deg) {
-    hub.style.transform = `rotate(${deg}deg)`;
-    window.pywebview.api.set_category(name);
-    document.querySelectorAll('.label').forEach(l => l.classList.remove('active'));
-    if(document.getElementById('lbl-' + name)) document.getElementById('lbl-' + name).classList.add('active');
+// Reflects backend truth on the wheel: primary needle/label always shown,
+// second needle/label/readout only shown while a second task is running.
+function applyActiveState(active, active2) {
+    const activeIdx = cats.indexOf(active);
+    hub.style.transform = `rotate(${activeIdx * catStep}deg)`;
+
+    document.querySelectorAll('.label').forEach(l => l.classList.remove('active', 'active-2'));
+    if (document.getElementById('lbl-' + active)) document.getElementById('lbl-' + active).classList.add('active');
+
+    const secondBox = document.getElementById('second-task-box');
+    if (active2) {
+        const idx2 = cats.indexOf(active2);
+        hub2.style.transform = `rotate(${idx2 * catStep}deg)`;
+        hub2.style.display = 'block';
+        secondBox.style.display = 'flex';
+        if (document.getElementById('lbl-' + active2)) document.getElementById('lbl-' + active2).classList.add('active-2');
+    } else {
+        hub2.style.display = 'none';
+        secondBox.style.display = 'none';
+    }
+}
+
+function select(name, asSecond) {
+    window.pywebview.api.set_category(name, !!asSecond).then(() => {
+        window.pywebview.api.get_status().then(s => applyActiveState(s.active, s.active_2));
+    });
 }
 
 setInterval(() => {
@@ -575,6 +693,10 @@ setInterval(() => {
         window.pywebview.api.get_status().then(s => {
             document.getElementById('session-time').innerText = format(s.session);
             document.getElementById('total-time').innerText = format(s.total, true);
+            if (s.active_2) {
+                document.getElementById('second-task-name').innerText = s.active_2.toUpperCase();
+                document.getElementById('second-task-time').innerText = format(s.session_2);
+            }
         });
     }
 }, 1000);

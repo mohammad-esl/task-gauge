@@ -60,13 +60,16 @@
     <div class="main-container" id="app-ui">
         <svg id="hit-surface" viewBox="0 0 100 100"></svg>
         <div id="hub"><div class="needle"></div></div>
+        <div id="hub-2"><div class="needle needle-2"></div></div>
         <div class="center-display">
             <div id="session-time" onclick="toggleSettings()">00:00</div>
             <div class="total-box">TOTAL <span id="total-time">00:00:00</span></div>
+            <div id="second-task-box"><span id="second-task-name"></span> <span id="second-task-time">00:00</span></div>
             <div class="controls">
                 <button class="icon-btn" onclick="toggleSettings()">STATS/EDIT</button>
                 <button class="icon-btn" onclick="toggleGantt()">GANTT</button>
                 <button class="icon-btn" onclick="resetCurrent()" style="color:var(--red)">RESET</button>
+                <button class="icon-btn" id="dual-task-btn" onclick="toggleDualTaskMode()" title="Ctrl+click a task to run it alongside the current one">2×</button>
             </div>
         </div>
     </div>

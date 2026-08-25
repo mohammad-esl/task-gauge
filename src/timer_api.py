@@ -29,10 +29,13 @@ class TimerApi:
             "categories": list(DEFAULT_CATEGORIES),
             "totals": {name: 0 for name in DEFAULT_CATEGORIES},
             "last_date": time_utils.current_logical_date_str(),
+            "dual_task_mode": False,
         }
         self.data = self.config.load(default_data)
         if "last_date" not in self.data:
             self.data["last_date"] = time_utils.current_logical_date_str()
+        if "dual_task_mode" not in self.data:
+            self.data["dual_task_mode"] = False
 
         self._check_daily_reset()
 
@@ -43,6 +46,11 @@ class TimerApi:
 
         self.active_cat = "Nothing"
         self.start_time = time.time()
+
+        # Second concurrent track, only used while dual_task_mode is on.
+        # None means the slot is empty (no second task running).
+        self.active_cat_2 = None
+        self.start_time_2 = None
 
         self._import_missing_history_sessions()
 
@@ -98,6 +106,24 @@ class TimerApi:
         self.start_time = end_ts
         return duration
 
+    def _finalize_second_session(self, end_ts):
+        """Same as _finalize_active_session but for the optional second
+        concurrent track. Only meaningful while active_cat_2 is set."""
+        if self.active_cat_2 is None:
+            return 0
+
+        duration = int(end_ts - self.start_time_2)
+        cat = self.active_cat_2
+        self.active_cat_2 = None
+        self.start_time_2 = None
+        if duration <= 0:
+            return 0
+
+        self.data["totals"][cat] = self.data["totals"].get(cat, 0) + duration
+        self._write_to_history(cat, duration, end_ts=end_ts)
+        self._record_session(cat, end_ts - duration, end_ts)
+        return duration
+
     def _add_duration_to_daily_report(self, date_str, category, duration):
         if duration <= 0:
             return
@@ -119,21 +145,36 @@ class TimerApi:
 
     def _align_active_session_to_logical_day(self):
         now_ts = time.time()
+        changed = False
+
         start_dt = datetime.fromtimestamp(self.start_time)
         current_dt = datetime.fromtimestamp(now_ts)
+        if time_utils.logical_date(start_dt) != time_utils.logical_date(current_dt):
+            previous_logical_date = time_utils.logical_date(start_dt).strftime("%Y-%m-%d")
+            rollover_ts = time_utils.logical_day_start(time_utils.logical_date(current_dt)).timestamp()
+            duration = int(rollover_ts - self.start_time)
+            if duration > 0:
+                self._write_to_history(self.active_cat, duration, end_ts=rollover_ts)
+                self._record_session(self.active_cat, self.start_time, rollover_ts)
+                self._add_duration_to_daily_report(previous_logical_date, self.active_cat, duration)
+            self.start_time = rollover_ts
+            changed = True
 
-        if time_utils.logical_date(start_dt) == time_utils.logical_date(current_dt):
-            return
+        if self.active_cat_2 is not None:
+            start_dt_2 = datetime.fromtimestamp(self.start_time_2)
+            if time_utils.logical_date(start_dt_2) != time_utils.logical_date(current_dt):
+                previous_logical_date_2 = time_utils.logical_date(start_dt_2).strftime("%Y-%m-%d")
+                rollover_ts_2 = time_utils.logical_day_start(time_utils.logical_date(current_dt)).timestamp()
+                duration_2 = int(rollover_ts_2 - self.start_time_2)
+                if duration_2 > 0:
+                    self._write_to_history(self.active_cat_2, duration_2, end_ts=rollover_ts_2)
+                    self._record_session(self.active_cat_2, self.start_time_2, rollover_ts_2)
+                    self._add_duration_to_daily_report(previous_logical_date_2, self.active_cat_2, duration_2)
+                self.start_time_2 = rollover_ts_2
+                changed = True
 
-        previous_logical_date = time_utils.logical_date(start_dt).strftime("%Y-%m-%d")
-        rollover_ts = time_utils.logical_day_start(time_utils.logical_date(current_dt)).timestamp()
-        duration = int(rollover_ts - self.start_time)
-        if duration > 0:
-            self._write_to_history(self.active_cat, duration, end_ts=rollover_ts)
-            self._record_session(self.active_cat, self.start_time, rollover_ts)
-            self._add_duration_to_daily_report(previous_logical_date, self.active_cat, duration)
-        self.start_time = rollover_ts
-        self.save_config()
+        if changed:
+            self.save_config()
 
     def _clip_session_to_day(self, session, date_str):
         try:
@@ -175,8 +216,12 @@ class TimerApi:
     def _get_live_totals(self):
         self._align_active_session_to_logical_day()
         totals = self.data["totals"].copy()
-        session = int(time.time() - self.start_time)
+        now = time.time()
+        session = int(now - self.start_time)
         totals[self.active_cat] = totals.get(self.active_cat, 0) + session
+        if self.active_cat_2 is not None:
+            session_2 = int(now - self.start_time_2)
+            totals[self.active_cat_2] = totals.get(self.active_cat_2, 0) + session_2
         return totals
 
     def _save_daily_report(self, date_str):
@@ -278,6 +323,23 @@ class TimerApi:
             clipped["clipped"] = False
             filtered.append(clipped)
 
+        if self.active_cat_2 is not None:
+            duration_2 = int(now - self.start_time_2)
+            live_session_2 = {
+                "date": date_str,
+                "category": self.active_cat_2,
+                "start": datetime.fromtimestamp(self.start_time_2).strftime("%Y-%m-%d %H:%M:%S"),
+                "end": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"),
+                "duration": duration_2,
+                "live": True,
+                "source": "live",
+            }
+            clipped_2 = self._clip_session_to_day(live_session_2, date_str)
+            if duration_2 > 0 and clipped_2:
+                clipped_2["session_id"] = None
+                clipped_2["clipped"] = False
+                filtered.append(clipped_2)
+
         categories = list(self.data["categories"])
         for session in filtered:
             cat = session.get("category")
@@ -327,6 +389,22 @@ class TimerApi:
                 self.data["totals"][self.active_cat] = day_seconds.get(self.active_cat, 0)
             self.save_config()
 
+    def _overlaps_existing(self, category, start_dt, end_dt, exclude_session_id=None):
+        """True if [start_dt, end_dt) overlaps another session in the same
+        category. Used to keep manual Gantt edits (drag or typed) from ever
+        producing overlapping blocks."""
+        for s in self.sessions.load():
+            if s["category"] != category or s.get("id") == exclude_session_id:
+                continue
+            try:
+                s_start = datetime.strptime(s["start"], "%Y-%m-%d %H:%M:%S")
+                s_end = datetime.strptime(s["end"], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+            if start_dt < s_end and end_dt > s_start:
+                return True
+        return False
+
     def _push_undo(self, action, session_id, before, after):
         self._undo_stack.append({
             "action": action, "session_id": session_id, "before": before, "after": after,
@@ -354,6 +432,10 @@ class TimerApi:
             return None
 
         if end_dt <= start_dt:
+            return None
+
+        new_category = category or session["category"]
+        if self._overlaps_existing(new_category, start_dt, end_dt, exclude_session_id=session_id):
             return None
 
         fields = {
@@ -396,6 +478,9 @@ class TimerApi:
             return None
 
         if end_dt <= start_dt or category not in self.data["categories"]:
+            return None
+
+        if self._overlaps_existing(category, start_dt, end_dt):
             return None
 
         date_str = time_utils.logical_date(start_dt).strftime("%Y-%m-%d")
@@ -455,6 +540,7 @@ class TimerApi:
         if today != last:
             rollover_ts = time_utils.logical_day_start(today).timestamp()
             self._finalize_active_session(rollover_ts)
+            self._finalize_second_session(rollover_ts)
             self._save_daily_report(self.data["last_date"])
 
             self.data["totals"] = {k: 0 for k in self.data["categories"]}
@@ -481,32 +567,61 @@ class TimerApi:
     def get_init_data(self):
         history_list = [{"name": k, "time": "{}h {}m {}s".format(*time_utils.get_hms(v))}
                         for k, v in self.data["totals"].items()]
-        return {"categories": self.data["categories"], "active": self.active_cat, "history": history_list}
+        return {
+            "categories": self.data["categories"],
+            "active": self.active_cat,
+            "active_2": self.active_cat_2,
+            "dual_task_mode": self.data["dual_task_mode"],
+            "history": history_list,
+        }
 
-    def set_category(self, name):
+    def set_category(self, name, as_second=False):
+        """Plain click (as_second=False) always sets the primary task.
+        Ctrl+click (as_second=True) targets the second track — only takes
+        effect while dual_task_mode is on; clicking the already-active
+        second task again clears that slot."""
         self._check_daily_reset()
-
         now = time.time()
-        self._finalize_active_session(now)
+
+        if as_second and self.data["dual_task_mode"]:
+            if name == self.active_cat_2:
+                self._finalize_second_session(now)
+            else:
+                self._finalize_second_session(now)
+                self.active_cat_2 = name
+                self.start_time_2 = now
+        else:
+            self._finalize_active_session(now)
+            self.active_cat = name
+            self.start_time = now
+
         self.save_config()
-
-        self.active_cat = name
-        self.start_time = now
-
         self._save_daily_report(time_utils.current_logical_date_str())
         self.last_report_save = time.time()
 
         return {"status": "success"}
 
+    def set_dual_task_mode(self, enabled):
+        now = time.time()
+        if not enabled and self.active_cat_2 is not None:
+            self._finalize_second_session(now)  # turning it off ends any running second task
+        self.data["dual_task_mode"] = bool(enabled)
+        self.save_config()
+        self._save_daily_report(time_utils.current_logical_date_str())
+        return {"status": "success", "dual_task_mode": self.data["dual_task_mode"]}
+
     def reset_timer(self):
         self._check_daily_reset()
         now = time.time()
         self._finalize_active_session(now)
+        self._finalize_second_session(now)
         self.save_config()
         return {"status": "reset"}
 
     def update_config(self, new_cats):
-        self.set_category(self.active_cat)
+        now = time.time()
+        self._finalize_active_session(now)
+        self._finalize_second_session(now)
 
         if "Nothing" in new_cats:
             new_cats.remove("Nothing")
@@ -531,8 +646,16 @@ class TimerApi:
 
         now = time.time()
         session = int(now - self.start_time)
-        return {
+        result = {
             "active": self.active_cat,
             "session": session,
             "total": self.data["totals"].get(self.active_cat, 0) + session,
+            "dual_task_mode": self.data["dual_task_mode"],
+            "active_2": None,
         }
+        if self.active_cat_2 is not None:
+            session_2 = int(now - self.start_time_2)
+            result["active_2"] = self.active_cat_2
+            result["session_2"] = session_2
+            result["total_2"] = self.data["totals"].get(self.active_cat_2, 0) + session_2
+        return result

@@ -46,9 +46,11 @@ def main():
 
         def save_on_close():
             # Without this, closing the window loses whatever time has
-            # accumulated on the active session since the last save
+            # accumulated on the active session(s) since the last save
             # (category switch, day rollover, or the 5-minute autosave).
-            api._finalize_active_session(time.time())
+            now = time.time()
+            api._finalize_active_session(now)
+            api._finalize_second_session(now)
             api.save_config()
 
         window.events.closing += save_on_close

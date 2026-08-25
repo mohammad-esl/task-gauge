@@ -48,7 +48,7 @@ def test_short_break_is_not_written_to_history(tmp_path):
 def test_get_status_returns_expected_shape(tmp_path):
     api = TimerApi(str(tmp_path))
     status = api.get_status()
-    assert set(status.keys()) == {"active", "session", "total"}
+    assert {"active", "session", "total", "dual_task_mode", "active_2"} <= set(status.keys())
     assert status["active"] == "Nothing"
     assert status["session"] >= 0
 
@@ -59,6 +59,125 @@ def test_update_config_keeps_nothing_first(tmp_path):
     assert result["categories"][0] == "Nothing"
     assert "Work" in result["categories"]
     assert "Study" in result["categories"]
+
+
+def test_dual_task_mode_defaults_off(tmp_path):
+    api = TimerApi(str(tmp_path))
+    assert api.data["dual_task_mode"] is False
+    assert api.active_cat_2 is None
+
+
+def test_set_category_without_dual_mode_replaces_active_as_before(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_category("Work")
+    api.set_category("Study")
+    assert api.active_cat == "Study"
+    assert api.active_cat_2 is None
+
+
+def test_ctrl_click_starts_second_track_without_disturbing_first(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_dual_task_mode(True)
+
+    api.set_category("Work")
+    assert api.active_cat == "Work"
+    assert api.active_cat_2 is None
+
+    api.set_category("Study", as_second=True)
+    assert api.active_cat == "Work"       # first track untouched
+    assert api.active_cat_2 == "Study"    # second track now running
+
+
+def test_ctrl_click_on_active_second_track_stops_it(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_dual_task_mode(True)
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+    assert api.active_cat_2 == "Study"
+
+    api.set_category("Study", as_second=True)  # ctrl+click the active second task again
+    assert api.active_cat_2 is None
+    assert api.active_cat == "Work"
+
+
+def test_ctrl_click_a_different_category_replaces_second_track(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study", "Project 2"])
+    api.set_dual_task_mode(True)
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+    assert api.active_cat_2 == "Study"
+
+    api.set_category("Project 2", as_second=True)
+    assert api.active_cat == "Work"
+    assert api.active_cat_2 == "Project 2"
+
+
+def test_plain_click_while_second_track_running_only_changes_first_track(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study", "Project 2"])
+    api.set_dual_task_mode(True)
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+
+    api.set_category("Project 2")  # plain click always targets the primary track
+    assert api.active_cat == "Project 2"
+    assert api.active_cat_2 == "Study"  # second track untouched
+
+
+def test_ctrl_click_without_dual_mode_is_ignored_and_falls_back_to_primary(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_category("Work")
+
+    api.set_category("Study", as_second=True)  # dual mode is off
+    assert api.active_cat == "Study"  # falls back to setting the primary track
+    assert api.active_cat_2 is None
+
+
+def test_disabling_dual_task_mode_finalizes_second_track(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.data["totals"]["Study"] = 0
+    api.set_dual_task_mode(True)
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+    api.start_time_2 = time.time() - 30  # pretend 30s elapsed on the second track
+
+    api.set_dual_task_mode(False)
+    assert api.active_cat_2 is None
+    assert api.data["totals"]["Study"] >= 30
+
+
+def test_get_status_includes_second_track_when_active(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_dual_task_mode(True)
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+
+    status = api.get_status()
+    assert status["dual_task_mode"] is True
+    assert status["active_2"] == "Study"
+    assert status["session_2"] >= 0
+
+
+def test_get_gantt_report_includes_both_live_sessions_in_dual_mode(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_dual_task_mode(True)
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+    api.start_time = time.time() - 60
+    api.start_time_2 = time.time() - 30
+
+    report = api.get_gantt_report()
+    live_sessions = [s for s in report["sessions"] if s.get("live")]
+    assert len(live_sessions) == 2
+    assert {s["category"] for s in live_sessions} == {"Work", "Study"}
 
 
 def test_get_week_report_has_seven_days(tmp_path):
@@ -165,6 +284,67 @@ def test_create_gantt_session_rejects_end_before_start(tmp_path):
     api = TimerApi(str(tmp_path))
     result = api.create_gantt_session("Nothing", "2026-08-06 10:00:00", "2026-08-06 09:00:00")
     assert result is None
+
+
+def test_create_gantt_session_rejects_overlap_in_same_category(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 10:00:00", "end": "2026-08-06 11:00:00", "duration": 3600,
+    })
+
+    result = api.create_gantt_session("Work", "2026-08-06 10:30:00", "2026-08-06 11:30:00")
+    assert result is None
+
+
+def test_create_gantt_session_allows_touching_edges_and_other_categories(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 10:00:00", "end": "2026-08-06 11:00:00", "duration": 3600,
+    })
+
+    # exactly flush against the existing block's end: allowed
+    flush = api.create_gantt_session("Work", "2026-08-06 11:00:00", "2026-08-06 12:00:00")
+    assert flush is not None
+
+    # same time range but a different category: allowed
+    other_cat = api.create_gantt_session("Study", "2026-08-06 10:00:00", "2026-08-06 11:00:00")
+    assert other_cat is not None
+
+
+def test_update_gantt_session_rejects_overlap_in_same_category(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 10:00:00", "end": "2026-08-06 11:00:00", "duration": 3600,
+    })
+    moving_id = api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 12:00:00", "end": "2026-08-06 13:00:00", "duration": 3600,
+    })
+
+    result = api.update_gantt_session(moving_id, start="2026-08-06 10:30:00", end="2026-08-06 11:30:00")
+    assert result is None
+    # original record is untouched
+    assert api.sessions.get(moving_id)["start"] == "2026-08-06 12:00:00"
+
+
+def test_update_gantt_session_does_not_block_against_itself(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    session_id = api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 10:00:00", "end": "2026-08-06 11:00:00", "duration": 3600,
+    })
+
+    # a tiny resize that still overlaps its own old range should succeed
+    result = api.update_gantt_session(session_id, start="2026-08-06 10:05:00", end="2026-08-06 11:00:00")
+    assert result is not None
+    assert result["start"] == "2026-08-06 10:05:00"
 
 
 def test_gantt_report_exposes_session_id_and_clipped_flag(tmp_path):
