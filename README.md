@@ -42,14 +42,28 @@ Timer_app/
 
 ## Run
 
-Install the dependency and start the app:
+The app is distributed as a built Windows executable — it's no longer run
+as a raw Python script. Double-click `run.bat` (or the desktop/Startup
+shortcut), which launches `dist/TaskGaugePro/TaskGaugePro.exe` directly.
+`data/` next to the exe holds your tracking data and persists across
+rebuilds.
+
+### Building the exe from source
+
+```bash
+build.bat
+```
+
+This uses PyInstaller (from the `TimeTracker` conda env) to rebuild
+`dist/TaskGaugePro/TaskGaugePro.exe` from `src/` and `static/`. Your
+`data/` folder next to the exe is left untouched by a rebuild.
+
+### Running from source (development only)
 
 ```bash
 pip install -r requirements.txt
 python src/app.py
 ```
-
-Or on Windows, double-click `run.bat` (starts the app without a console window).
 
 ## Tests
 

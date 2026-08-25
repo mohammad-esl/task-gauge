@@ -8,9 +8,20 @@ import webview
 import single_instance
 from timer_api import TimerApi
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "..", "data")
-STATIC_DIR = os.path.join(BASE_DIR, "..", "static")
+FROZEN = getattr(sys, "frozen", False)
+
+if FROZEN:
+    # Built exe: bundled read-only assets (static/) are unpacked under
+    # sys._MEIPASS, but data must live next to the exe so it persists
+    # across runs instead of vanishing with the temp bundle dir.
+    EXE_DIR = os.path.dirname(sys.executable)
+    STATIC_DIR = os.path.join(sys._MEIPASS, "static")
+    DATA_DIR = os.path.join(EXE_DIR, "data")
+else:
+    SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+    STATIC_DIR = os.path.join(SRC_DIR, "..", "static")
+    DATA_DIR = os.path.join(SRC_DIR, "..", "data")
+
 LOCK_FILE = os.path.join(DATA_DIR, "timer.lock")
 
 
