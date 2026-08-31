@@ -53,14 +53,24 @@
     </div>
 
     <div id="stats-panel">
-        <h4 style="margin:0 0 10px 0; color:var(--accent); letter-spacing:1px">RANGE STATS</h4>
-        <div style="display:flex; gap:6px; margin-bottom:8px; align-items:center;">
-            <select id="range-category" style="flex:1;"></select>
-            <input type="text" id="range-start" class="jalali-date-input" readonly placeholder="از تاریخ" onclick="openJalaliPicker('range-start')">
-            <input type="text" id="range-end" class="jalali-date-input" readonly placeholder="تا تاریخ" onclick="openJalaliPicker('range-end')">
+        <h4 style="margin:0 0 14px 0; color:var(--accent); letter-spacing:1px">RANGE STATS</h4>
+
+        <label class="field-label">Category</label>
+        <select id="range-category"></select>
+
+        <div class="stats-date-row">
+            <div>
+                <label class="field-label">از تاریخ</label>
+                <input type="text" id="range-start" class="jalali-date-input" readonly placeholder="از تاریخ" onclick="openJalaliPicker('range-start')">
+            </div>
+            <div>
+                <label class="field-label">تا تاریخ</label>
+                <input type="text" id="range-end" class="jalali-date-input" readonly placeholder="تا تاریخ" onclick="openJalaliPicker('range-end')">
+            </div>
         </div>
-        <button class="icon-btn" style="width:100%; margin-bottom:10px;" onclick="loadRangeStats()">GET TOTAL</button>
-        <div id="range-result" style="font-size:13px; color:var(--accent); margin-bottom:14px; min-height:18px;"></div>
+
+        <button class="save-btn" onclick="loadRangeStats()">GET TOTAL</button>
+        <div id="range-result" class="stats-result"></div>
         <button class="save-btn" style="background:#222; color:#777" onclick="toggleStats()">CLOSE</button>
     </div>
 
