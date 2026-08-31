@@ -169,16 +169,6 @@ function toggleSettings() {
     ui.className = isVisible ? 'main-container' : 'main-container blur';
 }
 
-let dualTaskMode = false;
-
-function toggleDualTaskMode() {
-    window.pywebview.api.set_dual_task_mode(!dualTaskMode).then(result => {
-        dualTaskMode = result.dual_task_mode;
-        document.getElementById('dual-task-btn').classList.toggle('active-toggle', dualTaskMode);
-        window.pywebview.api.get_status().then(s => applyActiveState(s.active, s.active_2));
-    });
-}
-
 function toggleGantt() {
     const panel = document.getElementById('gantt-panel');
     const settings = document.getElementById('settings-panel');
@@ -722,8 +712,6 @@ function initUI(data) {
         label.style.top = (260 + 210 * Math.sin(rad) - 10) + 'px';
         document.getElementById('app-ui').appendChild(label);
     });
-    dualTaskMode = !!data.dual_task_mode;
-    document.getElementById('dual-task-btn').classList.toggle('active-toggle', dualTaskMode);
     applyActiveState(data.active, data.active_2);
 }
 

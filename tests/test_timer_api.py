@@ -1,3 +1,4 @@
+import json
 import time
 
 from timer_api import TimerApi
@@ -7,6 +8,20 @@ def test_fresh_instance_defaults_to_nothing(tmp_path):
     api = TimerApi(str(tmp_path))
     assert api.active_cat == "Nothing"
     assert "Nothing" in api.data["categories"]
+
+
+def test_construction_with_stale_last_date_triggers_rollover_without_crash(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "categories": ["Nothing", "Work"],
+        "totals": {"Nothing": 0, "Work": 100},
+        "last_date": "2000-01-01",
+        "dual_task_mode": True,
+    }))
+
+    api = TimerApi(str(tmp_path))  # day rollover fires during __init__
+    assert api.active_cat == "Nothing"
+    assert api.data["last_date"] != "2000-01-01"
 
 
 def test_set_category_switches_active_and_persists_config(tmp_path):
@@ -61,13 +76,13 @@ def test_update_config_keeps_nothing_first(tmp_path):
     assert "Study" in result["categories"]
 
 
-def test_dual_task_mode_defaults_off(tmp_path):
+def test_dual_task_mode_always_on(tmp_path):
     api = TimerApi(str(tmp_path))
-    assert api.data["dual_task_mode"] is False
+    assert api.data["dual_task_mode"] is True
     assert api.active_cat_2 is None
 
 
-def test_set_category_without_dual_mode_replaces_active_as_before(tmp_path):
+def test_set_category_plain_click_replaces_active_as_before(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study"])
     api.set_category("Work")
@@ -79,7 +94,6 @@ def test_set_category_without_dual_mode_replaces_active_as_before(tmp_path):
 def test_ctrl_click_starts_second_track_without_disturbing_first(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study"])
-    api.set_dual_task_mode(True)
 
     api.set_category("Work")
     assert api.active_cat == "Work"
@@ -93,7 +107,6 @@ def test_ctrl_click_starts_second_track_without_disturbing_first(tmp_path):
 def test_ctrl_click_on_active_second_track_stops_it(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study"])
-    api.set_dual_task_mode(True)
     api.set_category("Work")
     api.set_category("Study", as_second=True)
     assert api.active_cat_2 == "Study"
@@ -106,7 +119,6 @@ def test_ctrl_click_on_active_second_track_stops_it(tmp_path):
 def test_ctrl_click_a_different_category_replaces_second_track(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study", "Project 2"])
-    api.set_dual_task_mode(True)
     api.set_category("Work")
     api.set_category("Study", as_second=True)
     assert api.active_cat_2 == "Study"
@@ -119,7 +131,6 @@ def test_ctrl_click_a_different_category_replaces_second_track(tmp_path):
 def test_plain_click_while_second_track_running_only_changes_first_track(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study", "Project 2"])
-    api.set_dual_task_mode(True)
     api.set_category("Work")
     api.set_category("Study", as_second=True)
 
@@ -128,34 +139,9 @@ def test_plain_click_while_second_track_running_only_changes_first_track(tmp_pat
     assert api.active_cat_2 == "Study"  # second track untouched
 
 
-def test_ctrl_click_without_dual_mode_is_ignored_and_falls_back_to_primary(tmp_path):
-    api = TimerApi(str(tmp_path))
-    api.data["categories"].extend(["Work", "Study"])
-    api.set_category("Work")
-
-    api.set_category("Study", as_second=True)  # dual mode is off
-    assert api.active_cat == "Study"  # falls back to setting the primary track
-    assert api.active_cat_2 is None
-
-
-def test_disabling_dual_task_mode_finalizes_second_track(tmp_path):
-    api = TimerApi(str(tmp_path))
-    api.data["categories"].extend(["Work", "Study"])
-    api.data["totals"]["Study"] = 0
-    api.set_dual_task_mode(True)
-    api.set_category("Work")
-    api.set_category("Study", as_second=True)
-    api.start_time_2 = time.time() - 30  # pretend 30s elapsed on the second track
-
-    api.set_dual_task_mode(False)
-    assert api.active_cat_2 is None
-    assert api.data["totals"]["Study"] >= 30
-
-
 def test_get_status_includes_second_track_when_active(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study"])
-    api.set_dual_task_mode(True)
     api.set_category("Work")
     api.set_category("Study", as_second=True)
 
@@ -168,7 +154,6 @@ def test_get_status_includes_second_track_when_active(tmp_path):
 def test_get_gantt_report_includes_both_live_sessions_in_dual_mode(tmp_path):
     api = TimerApi(str(tmp_path))
     api.data["categories"].extend(["Work", "Study"])
-    api.set_dual_task_mode(True)
     api.set_category("Work")
     api.set_category("Study", as_second=True)
     api.start_time = time.time() - 60

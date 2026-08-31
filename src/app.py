@@ -11,17 +11,19 @@ from timer_api import TimerApi
 
 FROZEN = getattr(sys, "frozen", False)
 
+# DATA_DIR always points at data/ under the project root (D:\category2_Self_Development\Timer_app\data),
+# never a copy next to the built exe in dist\. dist\TaskGaugePro\ is rebuilt/wiped on every
+# build.bat run, so any data\ living there is disposable; the project-root data\ is the
+# single persistent store both the dev run and the built exe read from and write to.
+PROJECT_ROOT = "D:\\category2_Self_Development\\Timer_app"
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
 if FROZEN:
-    # Built exe: bundled read-only assets (static/) are unpacked under
-    # sys._MEIPASS, but data must live next to the exe so it persists
-    # across runs instead of vanishing with the temp bundle dir.
-    EXE_DIR = os.path.dirname(sys.executable)
+    # Built exe: bundled read-only assets (static/) are unpacked under sys._MEIPASS.
     STATIC_DIR = os.path.join(sys._MEIPASS, "static")
-    DATA_DIR = os.path.join(EXE_DIR, "data")
 else:
     SRC_DIR = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(SRC_DIR, "..", "static")
-    DATA_DIR = os.path.join(SRC_DIR, "..", "data")
 
 LOCK_FILE = os.path.join(DATA_DIR, "timer.lock")
 ICON_FILE = os.path.join(STATIC_DIR, "assets", "icon.ico")

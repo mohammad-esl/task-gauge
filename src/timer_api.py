@@ -29,15 +29,13 @@ class TimerApi:
             "categories": list(DEFAULT_CATEGORIES),
             "totals": {name: 0 for name in DEFAULT_CATEGORIES},
             "last_date": time_utils.current_logical_date_str(),
-            "dual_task_mode": False,
+            "dual_task_mode": True,
         }
         self.data = self.config.load(default_data)
         if "last_date" not in self.data:
             self.data["last_date"] = time_utils.current_logical_date_str()
         if "dual_task_mode" not in self.data:
-            self.data["dual_task_mode"] = False
-
-        self._check_daily_reset()
+            self.data["dual_task_mode"] = True
 
         if "Nothing" not in self.data["categories"]:
             self.data["categories"].insert(0, "Nothing")
@@ -47,10 +45,12 @@ class TimerApi:
         self.active_cat = "Nothing"
         self.start_time = time.time()
 
-        # Second concurrent track, only used while dual_task_mode is on.
-        # None means the slot is empty (no second task running).
+        # Second concurrent track, filled via Ctrl+click. None means the
+        # slot is empty (no second task running).
         self.active_cat_2 = None
         self.start_time_2 = None
+
+        self._check_daily_reset()
 
         self._import_missing_history_sessions()
 
@@ -585,13 +585,12 @@ class TimerApi:
 
     def set_category(self, name, as_second=False):
         """Plain click (as_second=False) always sets the primary task.
-        Ctrl+click (as_second=True) targets the second track — only takes
-        effect while dual_task_mode is on; clicking the already-active
-        second task again clears that slot."""
+        Ctrl+click (as_second=True) targets the second track; clicking the
+        already-active second task again clears that slot."""
         self._check_daily_reset()
         now = time.time()
 
-        if as_second and self.data["dual_task_mode"]:
+        if as_second:
             if name == self.active_cat_2:
                 self._finalize_second_session(now)
             else:
@@ -608,15 +607,6 @@ class TimerApi:
         self.last_report_save = time.time()
 
         return {"status": "success"}
-
-    def set_dual_task_mode(self, enabled):
-        now = time.time()
-        if not enabled and self.active_cat_2 is not None:
-            self._finalize_second_session(now)  # turning it off ends any running second task
-        self.data["dual_task_mode"] = bool(enabled)
-        self.save_config()
-        self._save_daily_report(time_utils.current_logical_date_str())
-        return {"status": "success", "dual_task_mode": self.data["dual_task_mode"]}
 
     def reset_timer(self):
         self._check_daily_reset()
