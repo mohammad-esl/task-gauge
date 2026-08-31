@@ -150,10 +150,12 @@ function loadWeekChart() {
 function toggleSettings() {
     const panel = document.getElementById('settings-panel');
     const gantt = document.getElementById('gantt-panel');
+    const stats = document.getElementById('stats-panel');
     const ui = document.getElementById('app-ui');
     const isVisible = panel.style.display === 'block';
     if (!isVisible) {
         gantt.style.display = 'none';
+        stats.style.display = 'none';
         window.pywebview.api.get_init_data().then(data => {
             const table = document.getElementById('history-table');
             table.innerHTML = data.history.map(h => `<tr><td>${h.name}</td><td>${h.time}</td></tr>`).join('');
@@ -163,7 +165,22 @@ function toggleSettings() {
                 renderTaskRows();
             });
             loadWeekChart();
+        });
+    }
+    panel.style.display = isVisible ? 'none' : 'block';
+    ui.className = isVisible ? 'main-container' : 'main-container blur';
+}
 
+function toggleStats() {
+    const panel = document.getElementById('stats-panel');
+    const settings = document.getElementById('settings-panel');
+    const gantt = document.getElementById('gantt-panel');
+    const ui = document.getElementById('app-ui');
+    const isVisible = panel.style.display === 'block';
+    if (!isVisible) {
+        settings.style.display = 'none';
+        gantt.style.display = 'none';
+        window.pywebview.api.get_init_data().then(data => {
             const rangeSelect = document.getElementById('range-category');
             rangeSelect.innerHTML = data.categories.map(c => `<option value="${c}">${c}</option>`).join('');
             const todayJalali = gregorianStrToJalaliStr(localDateString(new Date()));
@@ -273,11 +290,13 @@ function selectJalaliDay(day) {
 function toggleGantt() {
     const panel = document.getElementById('gantt-panel');
     const settings = document.getElementById('settings-panel');
+    const stats = document.getElementById('stats-panel');
     const ui = document.getElementById('app-ui');
     const isVisible = panel.style.display === 'block';
 
     if (!isVisible) {
         settings.style.display = 'none';
+        stats.style.display = 'none';
         ganttDateOffset = 0;
         loadGanttChart();
     }
@@ -772,11 +791,6 @@ function moveTaskRow(i, direction) {
 }
 
 function removeTaskRow(i) {
-    const name = taskRows[i];
-    if (categoriesWithHistory.has(name)) {
-        const ok = confirm(`"${name}" has recorded history. Removing it from this list only hides it from the dial — its past sessions stay in the Gantt/reports. Continue?`);
-        if (!ok) return;
-    }
     taskRows.splice(i, 1);
     renderTaskRows();
 }

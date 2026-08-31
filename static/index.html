@@ -19,25 +19,6 @@
         <div id="week-chart"></div>
         <div id="week-legend" class="legend"></div>
 
-        <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">RANGE STATS</h5>
-        <div style="display:flex; gap:6px; margin-bottom:8px; align-items:center;">
-            <select id="range-category" style="flex:1;"></select>
-            <input type="text" id="range-start" class="jalali-date-input" readonly placeholder="از تاریخ" onclick="openJalaliPicker('range-start')">
-            <input type="text" id="range-end" class="jalali-date-input" readonly placeholder="تا تاریخ" onclick="openJalaliPicker('range-end')">
-            <button class="icon-btn" onclick="loadRangeStats()">GET TOTAL</button>
-        </div>
-        <div id="range-result" style="font-size:12px; color:var(--accent); margin-bottom:10px; min-height:16px;"></div>
-
-        <div id="jalali-picker" class="jalali-picker">
-            <div class="jalali-picker-header">
-                <button type="button" onclick="jalaliPickerShiftMonth(-1)">‹</button>
-                <span id="jalali-picker-title"></span>
-                <button type="button" onclick="jalaliPickerShiftMonth(1)">›</button>
-            </div>
-            <div id="jalali-picker-weekdays" class="jalali-picker-weekdays"></div>
-            <div id="jalali-picker-grid" class="jalali-picker-grid"></div>
-        </div>
-
         <h5 style="margin:10px 0 5px 0; font-size:10px; color:#555">EDIT TASKS</h5>
         <div id="task-list"></div>
         <button class="icon-btn" style="width:100%; margin-bottom:10px;" onclick="addTaskRow()">+ ADD TASK</button>
@@ -59,6 +40,28 @@
         <div class="gantt-hint">Drag a block to move it, drag its edges to resize, double-click to type exact times, drag on empty space to create a new block. Ctrl+Z to undo.</div>
         <div id="gantt-chart" class="gantt-frame"></div>
         <button class="save-btn" style="background:#222; color:#777" onclick="toggleGantt()">CLOSE</button>
+    </div>
+
+    <div id="jalali-picker" class="jalali-picker">
+        <div class="jalali-picker-header">
+            <button type="button" onclick="jalaliPickerShiftMonth(-1)">‹</button>
+            <span id="jalali-picker-title"></span>
+            <button type="button" onclick="jalaliPickerShiftMonth(1)">›</button>
+        </div>
+        <div id="jalali-picker-weekdays" class="jalali-picker-weekdays"></div>
+        <div id="jalali-picker-grid" class="jalali-picker-grid"></div>
+    </div>
+
+    <div id="stats-panel">
+        <h4 style="margin:0 0 10px 0; color:var(--accent); letter-spacing:1px">RANGE STATS</h4>
+        <div style="display:flex; gap:6px; margin-bottom:8px; align-items:center;">
+            <select id="range-category" style="flex:1;"></select>
+            <input type="text" id="range-start" class="jalali-date-input" readonly placeholder="از تاریخ" onclick="openJalaliPicker('range-start')">
+            <input type="text" id="range-end" class="jalali-date-input" readonly placeholder="تا تاریخ" onclick="openJalaliPicker('range-end')">
+        </div>
+        <button class="icon-btn" style="width:100%; margin-bottom:10px;" onclick="loadRangeStats()">GET TOTAL</button>
+        <div id="range-result" style="font-size:13px; color:var(--accent); margin-bottom:14px; min-height:18px;"></div>
+        <button class="save-btn" style="background:#222; color:#777" onclick="toggleStats()">CLOSE</button>
     </div>
 
     <div id="session-edit-panel">
@@ -87,6 +90,7 @@
             <div id="second-task-box"><span id="second-task-name"></span> <span id="second-task-time">00:00</span></div>
             <div class="controls">
                 <button class="icon-btn" onclick="toggleGantt()">GANTT</button>
+                <button class="icon-btn" onclick="toggleStats()">STATS</button>
                 <button class="icon-btn" onclick="resetCurrent()" style="color:var(--red)">RESET</button>
             </div>
         </div>
