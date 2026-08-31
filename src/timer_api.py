@@ -283,6 +283,27 @@ class TimerApi:
             "days": days,
         }
 
+    def get_range_report(self, start_date, end_date):
+        """Total seconds per category across [start_date, end_date] (both
+        logical-date strings "YYYY-MM-DD", inclusive). Reads daily_report.csv,
+        the same per-day per-category store the week view uses, so it stays
+        consistent with WEEKLY VIEW's numbers."""
+        self._save_daily_report(time_utils.current_logical_date_str())
+
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        rows, _ = self.report.load(self.data["categories"])
+
+        totals = {cat: 0 for cat in self.data["categories"]}
+        day = start
+        while day <= end:
+            row = rows.get(day.strftime("%Y-%m-%d"), {})
+            for cat in self.data["categories"]:
+                totals[cat] += time_utils.parse_hms(row.get(cat, "00:00:00"))
+            day += timedelta(days=1)
+
+        return {"start_date": start_date, "end_date": end_date, "totals": totals}
+
     def get_gantt_report(self, date_str=None):
         self._check_daily_reset()
         self._align_active_session_to_logical_day()

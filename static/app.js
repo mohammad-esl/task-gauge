@@ -75,7 +75,7 @@ function changeWeek(direction) {
 function loadWeekChart() {
     window.pywebview.api.get_week_report(currentWeekOffset).then(data => {
         document.getElementById("week-label").innerText =
-            `${data.week_start} → ${data.week_end}`;
+            `${gregorianStrToJalaliStr(data.week_start)} → ${gregorianStrToJalaliStr(data.week_end)}`;
 
         const chart = document.getElementById("week-chart");
         const legend = document.getElementById("week-legend");
@@ -114,7 +114,7 @@ function loadWeekChart() {
             const bar = document.createElement("div");
             bar.className = "bar";
             bar.style.height = `${Math.max(4, (dayTotal / maxDayTotal) * 150)}px`;
-            bar.title = `${day.date} — ${secondsToLabel(dayTotal)}`;
+            bar.title = `${gregorianStrToJalaliStr(day.date)} — ${secondsToLabel(dayTotal)}`;
 
             chartCategories.forEach((cat, i) => {
                 const seconds = day.totals[cat] || 0;
@@ -163,10 +163,111 @@ function toggleSettings() {
                 renderTaskRows();
             });
             loadWeekChart();
+
+            const rangeSelect = document.getElementById('range-category');
+            rangeSelect.innerHTML = data.categories.map(c => `<option value="${c}">${c}</option>`).join('');
+            const todayJalali = gregorianStrToJalaliStr(localDateString(new Date()));
+            document.getElementById('range-start').value = todayJalali;
+            document.getElementById('range-end').value = todayJalali;
+            document.getElementById('range-result').innerText = '';
         });
     }
     panel.style.display = isVisible ? 'none' : 'block';
     ui.className = isVisible ? 'main-container' : 'main-container blur';
+}
+
+function loadRangeStats() {
+    const category = document.getElementById('range-category').value;
+    const startJalali = document.getElementById('range-start').value;
+    const endJalali = document.getElementById('range-end').value;
+    const result = document.getElementById('range-result');
+    if (!startJalali || !endJalali) {
+        result.innerText = 'اول و آخر بازه رو انتخاب کن.';
+        return;
+    }
+    const start = jalaliStrToGregorianStr(startJalali);
+    const end = jalaliStrToGregorianStr(endJalali);
+    if (start > end) {
+        result.innerText = 'تاریخ شروع نباید بعد از تاریخ پایان باشه.';
+        return;
+    }
+    window.pywebview.api.get_range_report(start, end).then(report => {
+        const seconds = report.totals[category] || 0;
+        const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+        result.innerText = `${category}: ${h}h ${m}m ${s}s (${startJalali} تا ${endJalali})`;
+    });
+}
+
+let jalaliPickerTarget = null;   // id of the text input currently being edited
+let jalaliPickerYear = null;
+let jalaliPickerMonth = null;
+
+function openJalaliPicker(inputId) {
+    const input = document.getElementById(inputId);
+    const picker = document.getElementById('jalali-picker');
+    jalaliPickerTarget = inputId;
+
+    const current = input.value ? input.value.split('/').map(Number) : null;
+    const todayJalali = toJalali(...localDateString(new Date()).split('-').map(Number));
+    jalaliPickerYear = current ? current[0] : todayJalali[0];
+    jalaliPickerMonth = current ? current[1] : todayJalali[1];
+
+    const rect = input.getBoundingClientRect();
+    picker.style.left = rect.left + 'px';
+    picker.style.top = (rect.bottom + 4) + 'px';
+    picker.style.display = 'block';
+    renderJalaliPicker();
+
+    document.addEventListener('click', closeJalaliPickerOnOutsideClick, { capture: true });
+}
+
+function closeJalaliPickerOnOutsideClick(e) {
+    const picker = document.getElementById('jalali-picker');
+    const input = document.getElementById(jalaliPickerTarget);
+    if (picker.contains(e.target) || e.target === input) return;
+    picker.style.display = 'none';
+    document.removeEventListener('click', closeJalaliPickerOnOutsideClick, { capture: true });
+}
+
+function jalaliPickerShiftMonth(direction) {
+    jalaliPickerMonth += direction;
+    if (jalaliPickerMonth < 1) { jalaliPickerMonth = 12; jalaliPickerYear -= 1; }
+    if (jalaliPickerMonth > 12) { jalaliPickerMonth = 1; jalaliPickerYear += 1; }
+    renderJalaliPicker();
+}
+
+function renderJalaliPicker() {
+    document.getElementById('jalali-picker-title').innerText =
+        `${JALALI_MONTHS[jalaliPickerMonth - 1]} ${jalaliPickerYear}`;
+
+    const weekdays = document.getElementById('jalali-picker-weekdays');
+    weekdays.innerHTML = JALALI_WEEKDAYS_SHORT.map(w => `<div>${w}</div>`).join('');
+
+    const [gy, gm, gd] = toGregorian(jalaliPickerYear, jalaliPickerMonth, 1);
+    const jsDate = new Date(gy, gm - 1, gd);
+    const jsWeekday = jsDate.getDay(); // 0=Sun..6=Sat
+    const firstCellOffset = (jsWeekday + 1) % 7; // convert to Sat=0..Fri=6
+
+    const monthLength = jalaliMonthLength(jalaliPickerYear, jalaliPickerMonth);
+    const selected = document.getElementById(jalaliPickerTarget).value;
+
+    const grid = document.getElementById('jalali-picker-grid');
+    grid.innerHTML = '';
+    for (let i = 0; i < firstCellOffset; i += 1) {
+        grid.innerHTML += '<div class="jalali-picker-day empty"></div>';
+    }
+    for (let day = 1; day <= monthLength; day += 1) {
+        const dayStr = `${jalaliPickerYear}/${pad2(jalaliPickerMonth)}/${pad2(day)}`;
+        const isSelected = dayStr === selected;
+        grid.innerHTML += `<div class="jalali-picker-day${isSelected ? ' selected' : ''}" onclick="selectJalaliDay(${day})">${day}</div>`;
+    }
+}
+
+function selectJalaliDay(day) {
+    const dayStr = `${jalaliPickerYear}/${pad2(jalaliPickerMonth)}/${pad2(day)}`;
+    document.getElementById(jalaliPickerTarget).value = dayStr;
+    document.getElementById('jalali-picker').style.display = 'none';
+    document.removeEventListener('click', closeJalaliPickerOnOutsideClick, { capture: true });
 }
 
 function toggleGantt() {
@@ -203,7 +304,7 @@ function loadGanttChart() {
     const targetDate = logicalDateString(addDays(new Date(), ganttDateOffset));
     window.pywebview.api.get_gantt_report(targetDate).then(data => {
         ganttData = data;
-        document.getElementById('gantt-date').innerText = data.date;
+        document.getElementById('gantt-date').innerText = gregorianStrToJalaliStr(data.date);
         renderGantt(data);
     });
 }

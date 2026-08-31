@@ -188,6 +188,27 @@ def test_get_week_report_has_seven_days(tmp_path):
     assert all("totals" in d for d in report["days"])
 
 
+def test_get_range_report_sums_daily_totals_for_category(tmp_path):
+    api = TimerApi(str(tmp_path))
+    rows, fieldnames = api.report.load(api.data["categories"])
+    rows["2026-08-10"] = {"date": "2026-08-10", "Education": "01:00:00", "Nothing": "00:00:00"}
+    rows["2026-08-11"] = {"date": "2026-08-11", "Education": "02:00:00", "Nothing": "00:00:00"}
+    api.report.save(rows, fieldnames)
+
+    report = api.get_range_report("2026-08-10", "2026-08-11")
+    assert report["totals"]["Education"] == 3 * 3600
+
+
+def test_get_range_report_single_day_matches_that_day(tmp_path):
+    api = TimerApi(str(tmp_path))
+    rows, fieldnames = api.report.load(api.data["categories"])
+    rows["2026-08-10"] = {"date": "2026-08-10", "Education": "00:30:00", "Nothing": "00:00:00"}
+    api.report.save(rows, fieldnames)
+
+    report = api.get_range_report("2026-08-10", "2026-08-10")
+    assert report["totals"]["Education"] == 1800
+
+
 def test_get_gantt_report_includes_live_session(tmp_path):
     api = TimerApi(str(tmp_path))
     api.start_time = time.time() - 120  # 2 minutes into the current session
