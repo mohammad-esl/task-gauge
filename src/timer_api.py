@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import time_utils
 from storage import ConfigStore, HistoryLog, SessionsStore, DailyReportStore
 from edit_log import EditLog
+from subtasks import SubtaskStore
 
 DEFAULT_CATEGORIES = ["Nothing", "Education", "Work", "Study", "Project 1"]
 REPORT_SAVE_INTERVAL = 300  # 5 minutes
@@ -15,13 +16,22 @@ MAX_UNDO_STEPS = 20         # in-memory only; cleared on app restart
 
 
 class TimerApi:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, static_dir=None):
+        self.static_dir = static_dir
         self.config = ConfigStore(os.path.join(data_dir, "config.json"))
         self.history = HistoryLog(os.path.join(data_dir, "timer_history.txt"))
         self.sessions = SessionsStore(os.path.join(data_dir, "timer_sessions.json"))
         self.report = DailyReportStore(os.path.join(data_dir, "daily_report.csv"))
         self.edit_log = EditLog(os.path.join(data_dir, "gantt_edit_log.json"))
+        self.subtasks = SubtaskStore(os.path.join(data_dir, "subtasks.json"))
         self._undo_stack = []
+        self._subtask_windows = {}
+
+        # In-memory only (see docs/subtasks_plan.md #2-1): which subtask the
+        # active/second track is currently tagging sessions with. Never
+        # persisted, always resets to None on category change or restart.
+        self.active_subtask = None
+        self.active_subtask_2 = None
 
         self.last_report_save = time.time()
 
@@ -102,26 +112,51 @@ class TimerApi:
 
         self.data["totals"][self.active_cat] = self.data["totals"].get(self.active_cat, 0) + duration
         self._write_to_history(self.active_cat, duration, end_ts=end_ts)
-        self._record_session(self.active_cat, self.start_time, end_ts)
+        self._record_session(self.active_cat, self.start_time, end_ts,
+                              subtask_id=self.active_subtask)
         self.start_time = end_ts
         return duration
 
     def _finalize_second_session(self, end_ts):
         """Same as _finalize_active_session but for the optional second
-        concurrent track. Only meaningful while active_cat_2 is set."""
+        concurrent track. Only meaningful while active_cat_2 is set. Clears
+        the slot (and its subtask selection) — use _split_second_session
+        instead when the second track should keep running."""
         if self.active_cat_2 is None:
             return 0
 
         duration = int(end_ts - self.start_time_2)
         cat = self.active_cat_2
+        subtask_id = self.active_subtask_2
         self.active_cat_2 = None
         self.start_time_2 = None
+        self.active_subtask_2 = None
         if duration <= 0:
             return 0
 
         self.data["totals"][cat] = self.data["totals"].get(cat, 0) + duration
         self._write_to_history(cat, duration, end_ts=end_ts)
-        self._record_session(cat, end_ts - duration, end_ts)
+        self._record_session(cat, end_ts - duration, end_ts, subtask_id=subtask_id)
+        return duration
+
+    def _split_second_session(self, end_ts):
+        """Like _finalize_second_session but keeps the second track running
+        (start_time_2 moves to end_ts instead of clearing the slot). Used
+        when switching the second track's subtask mid-session."""
+        if self.active_cat_2 is None:
+            return 0
+
+        duration = int(end_ts - self.start_time_2)
+        if duration <= 0:
+            self.start_time_2 = end_ts
+            return 0
+
+        cat = self.active_cat_2
+        self.data["totals"][cat] = self.data["totals"].get(cat, 0) + duration
+        self._write_to_history(cat, duration, end_ts=end_ts)
+        self._record_session(cat, self.start_time_2, end_ts,
+                              subtask_id=self.active_subtask_2)
+        self.start_time_2 = end_ts
         return duration
 
     def _add_duration_to_daily_report(self, date_str, category, duration):
@@ -198,20 +233,23 @@ class TimerApi:
         clipped["duration"] = int((clipped_end - clipped_start).total_seconds())
         return clipped
 
-    def _record_session(self, name, start_ts, end_ts):
+    def _record_session(self, name, start_ts, end_ts, subtask_id=None):
         duration = int(end_ts - start_ts)
         if duration < 1:
             return
 
         start_dt = datetime.fromtimestamp(start_ts)
         end_dt = datetime.fromtimestamp(end_ts)
-        self.sessions.append({
+        record = {
             "date": time_utils.logical_date(start_dt).strftime("%Y-%m-%d"),
             "category": name,
             "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "duration": duration,
-        })
+        }
+        if subtask_id:
+            record["subtask_id"] = subtask_id
+        self.sessions.append(record)
 
     def _get_live_totals(self):
         self._align_active_session_to_logical_day()
@@ -359,6 +397,7 @@ class TimerApi:
             if duration_2 > 0 and clipped_2:
                 clipped_2["session_id"] = None
                 clipped_2["clipped"] = False
+                clipped_2["slot"] = 2
                 filtered.append(clipped_2)
 
         categories = list(self.data["categories"])
@@ -434,7 +473,7 @@ class TimerApi:
             self._undo_stack.pop(0)
         self.edit_log.record(action, session_id, before, after)
 
-    def update_gantt_session(self, session_id, start=None, end=None, category=None):
+    def update_gantt_session(self, session_id, start=None, end=None, category=None, subtask_id=None):
         """Edit a session's start/end/category (used for both drag-resize
         and typed-time edits in the Gantt view). Returns the updated
         session, or None if session_id doesn't exist."""
@@ -467,6 +506,8 @@ class TimerApi:
         }
         if category:
             fields["category"] = category
+        if subtask_id is not None:
+            fields["subtask_id"] = subtask_id
 
         old_date = session["date"]
         updated = self.sessions.update(session_id, **fields)
@@ -491,7 +532,7 @@ class TimerApi:
         self._push_undo("delete", session_id, before, None)
         return {"status": "deleted"}
 
-    def create_gantt_session(self, category, start, end):
+    def create_gantt_session(self, category, start, end, subtask_id=None):
         try:
             start_dt = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
             end_dt = datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
@@ -505,13 +546,16 @@ class TimerApi:
             return None
 
         date_str = time_utils.logical_date(start_dt).strftime("%Y-%m-%d")
-        session_id = self.sessions.append({
+        new_session = {
             "date": date_str,
             "category": category,
             "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "duration": int((end_dt - start_dt).total_seconds()),
-        })
+        }
+        if subtask_id:
+            new_session["subtask_id"] = subtask_id
+        session_id = self.sessions.append(new_session)
 
         self._resync_day(date_str)
         created = self.sessions.get(session_id)
@@ -566,6 +610,8 @@ class TimerApi:
 
             self.data["totals"] = {k: 0 for k in self.data["categories"]}
             self.data["last_date"] = today.strftime("%Y-%m-%d")
+            self.active_subtask = None
+            self.active_subtask_2 = None
 
             self.history.append(f"\n--- NEW DAY: {self.data['last_date']} ---\n")
             self.save_config()
@@ -596,10 +642,14 @@ class TimerApi:
     def get_init_data(self):
         history_list = [{"name": k, "time": "{}h {}m {}s".format(*time_utils.get_hms(v))}
                         for k, v in self.data["totals"].items()]
+        has_subtasks = {cat: bool(self.subtasks.list_for(cat)) for cat in self.data["categories"]}
         return {
             "categories": self.data["categories"],
             "active": self.active_cat,
             "active_2": self.active_cat_2,
+            "active_subtask": self.active_subtask,
+            "active_subtask_2": self.active_subtask_2,
+            "has_subtasks": has_subtasks,
             "dual_task_mode": self.data["dual_task_mode"],
             "history": history_list,
         }
@@ -618,10 +668,12 @@ class TimerApi:
                 self._finalize_second_session(now)
                 self.active_cat_2 = name
                 self.start_time_2 = now
+                self.active_subtask_2 = None
         else:
             self._finalize_active_session(now)
             self.active_cat = name
             self.start_time = now
+            self.active_subtask = None
 
         self.save_config()
         self._save_daily_report(time_utils.current_logical_date_str())
@@ -645,6 +697,10 @@ class TimerApi:
         if "Nothing" in new_cats:
             new_cats.remove("Nothing")
         new_cats.insert(0, "Nothing")
+
+        removed = set(self.data["categories"]) - set(new_cats)
+        for name in removed:
+            self.subtasks.drop_category(name)
 
         new_totals = {name: self.data["totals"].get(name, 0) for name in new_cats}
         self.data["categories"], self.data["totals"] = new_cats, new_totals
@@ -671,6 +727,8 @@ class TimerApi:
             "total": self.data["totals"].get(self.active_cat, 0) + session,
             "dual_task_mode": self.data["dual_task_mode"],
             "active_2": None,
+            "active_subtask": self.active_subtask,
+            "active_subtask_2": self.active_subtask_2,
         }
         if self.active_cat_2 is not None:
             session_2 = int(now - self.start_time_2)
@@ -678,3 +736,150 @@ class TimerApi:
             result["session_2"] = session_2
             result["total_2"] = self.data["totals"].get(self.active_cat_2, 0) + session_2
         return result
+
+    # ------------------------------------------------------------------
+    # Subtasks: management + optional active-selection + reports.
+    # subtask_id is purely a label on a session record — no existing
+    # totals/report/gantt code path reads it.
+    # ------------------------------------------------------------------
+
+    def get_subtasks(self, category):
+        return self.subtasks.list_for(category)
+
+    def create_subtask(self, category, name, planned_start=None, planned_end=None):
+        return self.subtasks.create(category, name, planned_start=planned_start,
+                                     planned_end=planned_end)
+
+    def update_subtask(self, subtask_id, name=None,
+                        planned_start=None, planned_end=None, color=None):
+        return self.subtasks.update(subtask_id, name=name,
+                                     planned_start=planned_start,
+                                     planned_end=planned_end, color=color)
+
+    def archive_subtask(self, subtask_id):
+        if self.active_subtask == subtask_id:
+            self.active_subtask = None
+        if self.active_subtask_2 == subtask_id:
+            self.active_subtask_2 = None
+        return {"status": "archived" if self.subtasks.archive(subtask_id) else "not_found"}
+
+    def reorder_subtasks(self, category, ids):
+        self.subtasks.reorder(category, ids)
+        return {"status": "ok"}
+
+    def set_active_subtask(self, subtask_id=None, as_second=False):
+        now = time.time()
+        target_cat = self.active_cat_2 if as_second else self.active_cat
+        if target_cat is None:
+            return {"status": "no_active_task"}
+
+        if subtask_id is not None:
+            found = self.subtasks.get(subtask_id)
+            if not found or found[0] != target_cat:
+                return {"status": "invalid"}
+
+        if as_second:
+            self._split_second_session(now)
+            self.active_subtask_2 = subtask_id
+        else:
+            self._finalize_active_session(now)
+            self.active_subtask = subtask_id
+
+        return {"status": "ok", "active_subtask": subtask_id}
+
+    def get_active_subtask(self):
+        return {"active": self.active_subtask, "active_2": self.active_subtask_2}
+
+    def set_session_subtask(self, session_id, subtask_id=None):
+        """Retroactively (re)labels an already-recorded session. Category
+        time is untouched, so _resync_day is unnecessary here."""
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        return self.sessions.update(session_id, subtask_id=subtask_id)
+
+    def get_subtask_gantt(self, category, date_str=None):
+        """Same clip/live/rollover logic as get_gantt_report, filtered down
+        to one category and relabeled by subtask instead of by category."""
+        base = self.get_gantt_report(date_str)
+        subs = self.subtasks.list_for(category)
+        rows = [{"id": None, "name": "بدون زیرتسک"}] + \
+               [{"id": s["id"], "name": s["name"]} for s in subs]
+
+        sessions = []
+        for s in base["sessions"]:
+            if s.get("category") != category:
+                continue
+            s = dict(s)
+            if s.get("live"):
+                s["subtask_id"] = (self.active_subtask_2 if s.get("slot") == 2
+                                    else self.active_subtask)
+            else:
+                rec = self.sessions.get(s.get("session_id"))
+                s["subtask_id"] = (rec or {}).get("subtask_id")
+            sessions.append(s)
+
+        return {"date": base["date"], "category": category,
+                "rows": rows, "sessions": sessions}
+
+    def get_subtask_range_report(self, category, start_date, end_date):
+        """Seconds spent per subtask (plus "no subtask") across a date
+        range, computed straight from timer_sessions.json records."""
+        subs = self.subtasks.list_for(category)
+        totals = {s["id"]: 0 for s in subs}
+        totals[None] = 0
+
+        for session in self.sessions.load():
+            if session.get("category") != category:
+                continue
+            date_str = session.get("date", "")
+            if not (start_date <= date_str <= end_date):
+                continue
+            sid = session.get("subtask_id")
+            totals[sid] = totals.get(sid, 0) + int(session.get("duration", 0))
+
+        return {"category": category, "start_date": start_date,
+                "end_date": end_date, "totals": totals}
+
+    def get_subtask_summary(self, category):
+        subs = self.subtasks.list_for(category)
+        spent = {s["id"]: 0 for s in subs}
+        last_activity = {s["id"]: None for s in subs}
+
+        for session in self.sessions.load():
+            if session.get("category") != category:
+                continue
+            sid = session.get("subtask_id")
+            if sid not in spent:
+                continue
+            spent[sid] += int(session.get("duration", 0))
+            end = session.get("end")
+            if end and (last_activity[sid] is None or end > last_activity[sid]):
+                last_activity[sid] = end
+
+        return [{
+            "id": s["id"],
+            "name": s["name"],
+            "planned_start": s.get("planned_start"),
+            "planned_end": s.get("planned_end"),
+            "spent": spent.get(s["id"], 0),
+            "last_activity": last_activity.get(s["id"]),
+        } for s in subs]
+
+    def open_subtask_window(self, category):
+        import webview
+        from urllib.parse import quote
+
+        if category in self._subtask_windows:
+            try:
+                self._subtask_windows[category].show()
+                return {"status": "focused"}
+            except Exception:
+                del self._subtask_windows[category]
+
+        url = os.path.join(self.static_dir, "subtasks.html") + "?category=" + quote(category)
+        win = webview.create_window("Subtasks — " + category, url=url,
+                                     js_api=self, width=980, height=760)
+        win.events.closed += lambda: self._subtask_windows.pop(category, None)
+        self._subtask_windows[category] = win
+        return {"status": "opened"}

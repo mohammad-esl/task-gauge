@@ -1,0 +1,58 @@
+:root { --bg: #0a0a0a; --accent: #00e5ff; --ring: #161616; --red: #ff4b2b; }
+body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; box-sizing: border-box; }
+h4 { margin: 0 0 14px 0; color: var(--accent); letter-spacing: 1px; }
+h5 { margin: 18px 0 8px 0; font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 1px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.tab-btn { background: #111; border: 1px solid #333; color: #777; padding: 8px 14px; cursor: pointer; border-radius: 4px; font-size: 12px; }
+.tab-btn.active { color: var(--accent); border-color: var(--accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.sub-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.sub-row input[type="text"] { flex: 1; min-width: 0; background: #000; color: var(--accent); border: 1px solid #444; padding: 7px 8px; box-sizing: border-box; font-size: 12px; border-radius: 4px; }
+.sub-row select { background: #000; color: var(--accent); border: 1px solid #444; padding: 7px; font-size: 11px; border-radius: 4px; }
+.sub-row input[type="text"].date-field { width: 110px; flex: none; cursor: pointer; text-align: center; direction: ltr; }
+.row-btn { background: #181818; border: 1px solid #333; color: #777; cursor: pointer; width: 26px; height: 28px; flex-shrink: 0; border-radius: 4px; font-size: 11px; }
+.row-btn:hover:not(:disabled) { color: white; border-color: #777; }
+.row-btn:disabled { opacity: 0.3; cursor: default; }
+.row-btn.archive-btn { color: #ff8a8a; border-color: #3a1414; }
+
+.save-btn { background: var(--accent); color: black; border: none; padding: 10px; width: 100%; cursor: pointer; font-weight: bold; border-radius: 4px; margin-top: 8px; }
+.icon-btn { background: none; border: 1px solid #333; color: #555; cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 10px; }
+.icon-btn:hover { color: white; border-color: #777; }
+
+.gantt-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+.gantt-date { color: #777; font-size: 11px; margin-bottom: 6px; }
+.gantt-frame { background: #070707; border: 1px solid #222; border-radius: 10px; padding: 12px; }
+.gantt-axis { position: relative; height: 22px; margin-left: 120px; border-bottom: 1px solid #252525; color: #555; font-size: 10px; }
+.axis-mark { position: absolute; transform: translateX(-50%); bottom: 4px; }
+.gantt-row { display: flex; align-items: center; min-height: 34px; border-bottom: 1px solid #151515; }
+.gantt-row:last-child { border-bottom: none; }
+.gantt-label { width: 110px; padding-right: 10px; color: #aaa; font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gantt-lane { position: relative; flex: 1; height: 26px; background: #101010; border-left: 1px solid #222; border-right: 1px solid #222; }
+.gantt-block { position: absolute; top: 5px; height: 16px; min-width: 2px; border-radius: 4px; box-shadow: 0 0 10px rgba(0,0,0,0.35); }
+.gantt-block.live { opacity: 0.85; }
+.gantt-empty { color: #555; font-size: 12px; padding: 20px; text-align: center; }
+
+.stats-date-row { display: flex; gap: 10px; margin-bottom: 4px; }
+.stats-date-row > div { flex: 1; min-width: 0; }
+.jalali-date-input { width: 100%; background: #000; color: var(--accent); border: 1px solid #444; padding: 8px; box-sizing: border-box; font-size: 12px; font-family: inherit; border-radius: 4px; cursor: pointer; text-align: center; direction: ltr; }
+.field-label { display: block; font-size: 10px; color: #666; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
+.stats-result { font-size: 13px; color: var(--accent); margin: 14px 0; }
+.stats-result-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #222; font-size: 12px; }
+
+.plan-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.plan-table th, .plan-table td { padding: 6px 8px; border-bottom: 1px solid #222; text-align: left; }
+.plan-table th { color: #666; font-weight: normal; text-transform: uppercase; font-size: 10px; }
+
+.jalali-picker { display: none; position: fixed; z-index: 300; width: 220px; background: #0d0d0d; border: 1px solid #333; border-radius: 8px; padding: 10px; box-shadow: 0 0 30px black; direction: rtl; }
+.jalali-picker-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--accent); }
+.jalali-picker-header button { background: none; border: 1px solid #333; color: #aaa; border-radius: 4px; cursor: pointer; width: 22px; height: 22px; }
+.jalali-picker-header button:hover { color: white; border-color: #777; }
+.jalali-picker-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); font-size: 10px; color: #666; text-align: center; margin-bottom: 4px; }
+.jalali-picker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.jalali-picker-day { text-align: center; font-size: 11px; color: #ccc; padding: 5px 0; border-radius: 4px; cursor: pointer; }
+.jalali-picker-day:hover { background: #222; }
+.jalali-picker-day.empty { cursor: default; }
+.jalali-picker-day.empty:hover { background: none; }
+.jalali-picker-day.selected { background: var(--accent); color: black; font-weight: bold; }

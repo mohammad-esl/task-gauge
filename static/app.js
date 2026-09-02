@@ -165,6 +165,10 @@ function toggleSettings() {
                 renderTaskRows();
             });
             loadWeekChart();
+
+            const subtaskSelect = document.getElementById('subtask-window-category');
+            subtaskSelect.innerHTML = data.categories.filter(c => c !== 'Nothing')
+                .map(c => `<option value="${c}">${c}</option>`).join('');
         });
     }
     panel.style.display = isVisible ? 'none' : 'block';
@@ -731,6 +735,12 @@ document.addEventListener('keydown', e => {
     }
 });
 
+function openSubtaskWindow() {
+    const category = document.getElementById('subtask-window-category').value;
+    if (!category) return;
+    window.pywebview.api.open_subtask_window(category);
+}
+
 function resetCurrent() {
     if(confirm("Reset current session?")) window.pywebview.api.reset_timer();
 }
@@ -803,9 +813,190 @@ function saveSettings() {
 
 let catStep = 0;
 const hub2 = document.getElementById('hub-2');
+let latestActiveSubtask = null;
+let latestActiveSubtask2 = null;
+
+function categoryColor(catName) {
+    const i = Math.max(0, cats.indexOf(catName) - 1);
+    return chartColors[i % chartColors.length];
+}
+
+// Annular sector path, entirely inside the wheel's existing radius (the
+// slices already reach r=50, so the arc sits just inside that at 44-49 —
+// no viewBox change, so it can never overflow the SVG box or collide with
+// the labels, which live further out at a 210px pixel radius).
+const NS = "http://www.w3.org/2000/svg";
+const ARC_R_IN = 51;
+const ARC_R_OUT = 52.5;
+const MIN_ARC_SEG_DEG = 4;
+
+function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
+    const a0 = (a0Deg - 90) * Math.PI / 180;
+    const a1 = (a1Deg - 90) * Math.PI / 180;
+    const large = (a1Deg - a0Deg) > 180 ? 1 : 0;
+    const p = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    const [x1, y1] = p(rOut, a0), [x2, y2] = p(rOut, a1);
+    const [x3, y3] = p(rIn, a1), [x4, y4] = p(rIn, a0);
+    return `M ${x1} ${y1} A ${rOut} ${rOut} 0 ${large} 1 ${x2} ${y2}`
+         + ` L ${x3} ${y3} A ${rIn} ${rIn} 0 ${large} 0 ${x4} ${y4} Z`;
+}
+
+function buildSubtaskArc(name, centerAngle, subs, isSecond) {
+    const a0 = centerAngle - catStep / 2;
+    const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
+    const n = options.length;
+    const segDeg = catStep / n;
+    const baseColor = categoryColor(name);
+    const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
+
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "subtask-arc");
+
+    if (segDeg < MIN_ARC_SEG_DEG) {
+        // Too many subtasks to subdivide legibly inside one slice's arc:
+        // draw a single flat indicator strip instead and rely on the
+        // click-to-open popover rather than per-subtask hover segments.
+        const strip = document.createElementNS(NS, "path");
+        strip.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, a0, a0 + catStep));
+        strip.setAttribute("class", "arc-strip" + (activeId ? " has-selection" : ""));
+        strip.setAttribute("fill", activeId ? baseColor : "#2a2a2a");
+        strip.onclick = (e) => { e.stopPropagation(); toggleSubtaskPopover(strip, subs, isSecond); };
+        g.appendChild(strip);
+        return g;
+    }
+
+    options.forEach((opt, k) => {
+        const segStart = a0 + segDeg * k;
+        const seg = document.createElementNS(NS, "path");
+        seg.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, segStart, segStart + segDeg));
+        const isSelected = opt.id === activeId;
+        seg.setAttribute("class", "arc-seg" + (isSelected ? " selected" : ""));
+        seg.setAttribute("fill", opt.id === null ? "#2a2a2a" : baseColor);
+        seg.setAttribute("opacity", opt.id === null ? "0.6" : (isSelected ? "1" : "0.55"));
+        seg.onclick = (e) => {
+            e.stopPropagation();
+            setActiveSubtask(isSelected ? null : opt.id, isSecond);
+        };
+        seg.addEventListener('mouseenter', () => showSubtaskTooltip(opt.name));
+        seg.addEventListener('mouseleave', hideSubtaskTooltip);
+        g.appendChild(seg);
+    });
+
+    return g;
+}
+
+function showSubtaskTooltip(name) {
+    hideSubtaskTooltip();
+    const tooltip = document.createElement('div');
+    tooltip.className = 'subtask-tooltip';
+    tooltip.id = 'subtask-tooltip';
+    tooltip.innerText = name;
+    document.getElementById('app-ui').appendChild(tooltip);
+}
+
+function hideSubtaskTooltip() {
+    const el = document.getElementById('subtask-tooltip');
+    if (el) el.remove();
+}
+
+function toggleSubtaskPopover(anchorEl, subs, isSecond) {
+    if (document.getElementById('subtask-popover')) {
+        closeSubtaskPopover();
+        return;
+    }
+
+    const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
+    const containerRect = document.getElementById('app-ui').getBoundingClientRect();
+    const rect = anchorEl.getBoundingClientRect();
+
+    const popover = document.createElement('div');
+    popover.className = 'subtask-popover';
+    popover.id = 'subtask-popover';
+    // Clamp inside the container so it can never spill past its right/left edge.
+    const left = Math.max(0, Math.min(containerRect.width - 150, rect.left - containerRect.left));
+    popover.style.left = left + 'px';
+    popover.style.top = (rect.top - containerRect.top) + 'px';
+
+    const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
+    options.forEach(opt => {
+        const item = document.createElement('div');
+        item.className = 'subtask-popover-item' + (opt.id === activeId ? ' selected' : '');
+        item.innerText = opt.name;
+        item.onclick = (e) => {
+            e.stopPropagation();
+            setActiveSubtask(opt.id === activeId ? null : opt.id, isSecond);
+            closeSubtaskPopover();
+        };
+        popover.appendChild(item);
+    });
+
+    document.getElementById('app-ui').appendChild(popover);
+    setTimeout(() => document.addEventListener('click', closeSubtaskPopoverOnOutsideClick, { capture: true }), 0);
+}
+
+function closeSubtaskPopoverOnOutsideClick(e) {
+    const popover = document.getElementById('subtask-popover');
+    if (popover && !popover.contains(e.target)) closeSubtaskPopover();
+}
+
+function closeSubtaskPopover() {
+    const el = document.getElementById('subtask-popover');
+    if (el) el.remove();
+    document.removeEventListener('click', closeSubtaskPopoverOnOutsideClick, { capture: true });
+}
+
+function setActiveSubtask(subtaskId, isSecond) {
+    window.pywebview.api.set_active_subtask(subtaskId, !!isSecond).then(() => {
+        refreshSubtaskArcs();
+    });
+}
+
+function refreshSubtaskArcs() {
+    window.pywebview.api.get_active_subtask().then(sel => {
+        latestActiveSubtask = sel.active;
+        latestActiveSubtask2 = sel.active_2;
+        renderSubtaskArcs();
+    });
+}
+
+let latestActiveCat = null, latestActiveCat2 = null;
+
+function renderSubtaskArcs() {
+    document.querySelectorAll('.subtask-arc').forEach(e => e.remove());
+    hideSubtaskTooltip();
+    closeSubtaskPopover();
+
+    const activeLabel = document.getElementById('active-subtask-label');
+    activeLabel.style.display = 'none';
+
+    if (latestActiveCat) {
+        window.pywebview.api.get_subtasks(latestActiveCat).then(subs => {
+            if (subs.length === 0) return;
+            const idx = cats.indexOf(latestActiveCat);
+            const g = buildSubtaskArc(latestActiveCat, idx * catStep, subs, false);
+            svg.appendChild(g);
+
+            const active = subs.find(s => s.id === latestActiveSubtask);
+            if (active) {
+                activeLabel.innerText = active.name;
+                activeLabel.style.display = 'block';
+            }
+        });
+    }
+    if (latestActiveCat2) {
+        window.pywebview.api.get_subtasks(latestActiveCat2).then(subs => {
+            if (subs.length === 0) return;
+            const idx2 = cats.indexOf(latestActiveCat2);
+            const g = buildSubtaskArc(latestActiveCat2, idx2 * catStep, subs, true);
+            svg.appendChild(g);
+        });
+    }
+}
 
 function initUI(data) {
     cats = data.categories;
+    latestActiveSubtask = data.active_subtask || null;
+    latestActiveSubtask2 = data.active_subtask_2 || null;
     svg.innerHTML = '';
     document.querySelectorAll('.label').forEach(e => e.remove());
     catStep = 360 / cats.length;
@@ -851,6 +1042,13 @@ function applyActiveState(active, active2) {
     } else {
         hub2.style.display = 'none';
         secondBox.style.display = 'none';
+    }
+
+    const categoryChanged = active !== latestActiveCat || active2 !== latestActiveCat2;
+    latestActiveCat = active;
+    latestActiveCat2 = active2;
+    if (categoryChanged) {
+        refreshSubtaskArcs();
     }
 }
 
