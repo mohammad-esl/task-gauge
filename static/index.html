@@ -95,11 +95,12 @@
     </div>
 
     <div class="main-container" id="app-ui">
-        <svg id="hit-surface" viewBox="0 0 100 100"></svg>
+        <svg id="hit-surface" viewBox="-8 -8 116 116"></svg>
         <div id="hub"><div class="needle"></div></div>
         <div id="hub-2"><div class="needle needle-2"></div></div>
         <div class="center-display">
             <div id="session-time" onclick="toggleSettings()">00:00</div>
+            <div id="active-subtask-label" style="display:none; font-size:10px; color:var(--accent); letter-spacing:0.5px; margin-top:-4px;"></div>
             <div class="total-box">TOTAL <span id="total-time">00:00:00</span></div>
             <div id="second-task-box"><span id="second-task-name"></span> <span id="second-task-time">00:00</span></div>
             <div class="controls">

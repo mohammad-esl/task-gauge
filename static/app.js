@@ -813,9 +813,229 @@ function saveSettings() {
 
 let catStep = 0;
 const hub2 = document.getElementById('hub-2');
+let hasSubtasksByCategory = {};
+let latestActiveSubtask = null;
+let latestActiveSubtask2 = null;
+
+function categoryColor(catName) {
+    const i = Math.max(0, cats.indexOf(catName) - 1);
+    return chartColors[i % chartColors.length];
+}
+
+function hexToHsl(hex) {
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0;
+    const l = (max + min) / 2;
+    const d = max - min;
+    if (d !== 0) {
+        s = d / (1 - Math.abs(2 * l - 1));
+        switch (max) {
+            case r: h = ((g - b) / d) % 6; break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h *= 60;
+        if (h < 0) h += 360;
+    }
+    return { h: Math.round(h), s: Math.round(s * 100) };
+}
+
+function subtaskShade(baseHex, k, n) {
+    const { h, s } = hexToHsl(baseHex);
+    const l = n === 1 ? 53 : 38 + (30 * k) / (n - 1);
+    return `hsl(${h} ${s}% ${l}%)`;
+}
+
+function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
+    const a0 = (a0Deg - 90) * Math.PI / 180;
+    const a1 = (a1Deg - 90) * Math.PI / 180;
+    const large = (a1Deg - a0Deg) > 180 ? 1 : 0;
+    const p = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    const [x1, y1] = p(rOut, a0), [x2, y2] = p(rOut, a1);
+    const [x3, y3] = p(rIn, a1), [x4, y4] = p(rIn, a0);
+    return `M ${x1} ${y1} A ${rOut} ${rOut} 0 ${large} 1 ${x2} ${y2}`
+         + ` L ${x3} ${y3} A ${rIn} ${rIn} 0 ${large} 0 ${x4} ${y4} Z`;
+}
+
+const ARC_R_IN = 51.5;
+const ARC_R_OUT = 57.5;
+const MIN_ARC_SEG_DEG = 4;
+const NS = "http://www.w3.org/2000/svg";
+
+function buildSubtaskArc(name, centerAngle, subs, isSecond) {
+    const a0 = centerAngle - catStep / 2;
+    const n = subs.length;
+    const segDeg = catStep / (n + 1);
+    const baseColor = categoryColor(name);
+    const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
+    const hasSelection = !!activeId;
+
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "subtask-arc");
+    g.dataset.category = name;
+
+    const collapsed = document.createElementNS(NS, "path");
+    collapsed.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, a0, a0 + catStep));
+    collapsed.setAttribute("class", "arc-collapsed" + (hasSelection ? " has-selection" : ""));
+    collapsed.setAttribute("fill", hasSelection ? baseColor : "#3a3a3a");
+    g.appendChild(collapsed);
+
+    const expanded = document.createElementNS(NS, "g");
+    expanded.setAttribute("class", "arc-expanded");
+    expanded.setAttribute("hidden", "hidden");
+
+    if (segDeg < MIN_ARC_SEG_DEG) {
+        // Too many subtasks for the arc to subdivide legibly: fall back to
+        // a floating vertical list instead of unreadably thin slivers.
+        collapsed.onclick = (e) => { e.stopPropagation(); openSubtaskPopover(name, subs, centerAngle, isSecond); };
+        g.appendChild(expanded);
+        return g;
+    }
+
+    let closeTimer = null;
+    const expand = () => { clearTimeout(closeTimer); expanded.removeAttribute("hidden"); };
+    const collapse = () => { closeTimer = setTimeout(() => expanded.setAttribute("hidden", "hidden"), 150); };
+    g.addEventListener('mouseenter', expand);
+    g.addEventListener('mouseleave', collapse);
+
+    const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
+    options.forEach((opt, k) => {
+        const segStart = a0 + segDeg * k;
+        const seg = document.createElementNS(NS, "path");
+        seg.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, segStart, segStart + segDeg));
+        const isSelected = opt.id === activeId;
+        seg.setAttribute("class", "arc-seg" + (isSelected ? " selected" : ""));
+        seg.setAttribute("fill", opt.id === null ? "#3a3a3a" : subtaskShade(baseColor, k - 1, subs.length));
+        seg.dataset.subtask = opt.id || '';
+        seg.onclick = (e) => {
+            e.stopPropagation();
+            setActiveSubtask(isSelected ? null : opt.id, isSecond);
+        };
+        seg.addEventListener('mouseenter', () => showSubtaskTooltip(seg, opt.name, segStart + segDeg / 2));
+        seg.addEventListener('mouseleave', hideSubtaskTooltip);
+        expanded.appendChild(seg);
+    });
+
+    g.appendChild(expanded);
+    return g;
+}
+
+function showSubtaskTooltip(seg, name, angleDeg) {
+    hideSubtaskTooltip();
+    const rad = (angleDeg - 90) * Math.PI / 180;
+    const tooltip = document.createElement('div');
+    tooltip.className = 'subtask-tooltip';
+    tooltip.id = 'subtask-tooltip';
+    tooltip.innerText = name;
+    const midR = (ARC_R_IN + ARC_R_OUT) / 2;
+    // svg viewBox is -8..108 mapped over the container's pixel box (520px, minus 16px margin scaled)
+    const px = (50 + midR * Math.cos(rad) + 8) / 116 * 520;
+    const py = (50 + midR * Math.sin(rad) + 8) / 116 * 520;
+    tooltip.style.left = px + 'px';
+    tooltip.style.top = py + 'px';
+    document.getElementById('app-ui').appendChild(tooltip);
+}
+
+function hideSubtaskTooltip() {
+    const el = document.getElementById('subtask-tooltip');
+    if (el) el.remove();
+}
+
+function openSubtaskPopover(name, subs, centerAngle, isSecond) {
+    closeSubtaskPopover();
+    const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
+    const rad = (centerAngle - 90) * Math.PI / 180;
+    const popover = document.createElement('div');
+    popover.className = 'subtask-popover';
+    popover.id = 'subtask-popover';
+    const px = (50 + 70 * Math.cos(rad) + 8) / 116 * 520;
+    const py = (50 + 70 * Math.sin(rad) + 8) / 116 * 520;
+    popover.style.left = px + 'px';
+    popover.style.top = py + 'px';
+
+    const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
+    options.forEach(opt => {
+        const item = document.createElement('div');
+        item.className = 'subtask-popover-item' + (opt.id === activeId ? ' selected' : '');
+        item.innerText = opt.name;
+        item.onclick = () => {
+            setActiveSubtask(opt.id === activeId ? null : opt.id, isSecond);
+            closeSubtaskPopover();
+        };
+        popover.appendChild(item);
+    });
+
+    document.getElementById('app-ui').appendChild(popover);
+    setTimeout(() => document.addEventListener('click', closeSubtaskPopoverOnOutsideClick, { capture: true }), 0);
+}
+
+function closeSubtaskPopoverOnOutsideClick(e) {
+    const popover = document.getElementById('subtask-popover');
+    if (popover && !popover.contains(e.target)) closeSubtaskPopover();
+}
+
+function closeSubtaskPopover() {
+    const el = document.getElementById('subtask-popover');
+    if (el) el.remove();
+    document.removeEventListener('click', closeSubtaskPopoverOnOutsideClick, { capture: true });
+}
+
+function setActiveSubtask(subtaskId, isSecond) {
+    window.pywebview.api.set_active_subtask(subtaskId, !!isSecond).then(() => {
+        refreshSubtaskArcs();
+    });
+}
+
+function refreshSubtaskArcs() {
+    window.pywebview.api.get_active_subtask().then(sel => {
+        latestActiveSubtask = sel.active;
+        latestActiveSubtask2 = sel.active_2;
+        renderSubtaskArcs();
+    });
+}
+
+let latestActiveCat = null, latestActiveCat2 = null;
+
+function renderSubtaskArcs() {
+    document.querySelectorAll('.subtask-arc').forEach(e => e.remove());
+    hideSubtaskTooltip();
+    closeSubtaskPopover();
+
+    const activeLabel = document.getElementById('active-subtask-label');
+    activeLabel.style.display = 'none';
+
+    if (latestActiveCat && hasSubtasksByCategory[latestActiveCat]) {
+        window.pywebview.api.get_subtasks(latestActiveCat).then(subs => {
+            if (subs.length === 0) return;
+            const idx = cats.indexOf(latestActiveCat);
+            const g = buildSubtaskArc(latestActiveCat, idx * catStep, subs, false);
+            svg.appendChild(g);
+
+            const active = subs.find(s => s.id === latestActiveSubtask);
+            if (active) {
+                activeLabel.innerText = active.name;
+                activeLabel.style.display = 'block';
+            }
+        });
+    }
+    if (latestActiveCat2 && hasSubtasksByCategory[latestActiveCat2]) {
+        window.pywebview.api.get_subtasks(latestActiveCat2).then(subs => {
+            if (subs.length === 0) return;
+            const idx2 = cats.indexOf(latestActiveCat2);
+            const g = buildSubtaskArc(latestActiveCat2, idx2 * catStep, subs, true);
+            svg.appendChild(g);
+        });
+    }
+}
 
 function initUI(data) {
     cats = data.categories;
+    hasSubtasksByCategory = data.has_subtasks || {};
+    latestActiveSubtask = data.active_subtask || null;
+    latestActiveSubtask2 = data.active_subtask_2 || null;
     svg.innerHTML = '';
     document.querySelectorAll('.label').forEach(e => e.remove());
     catStep = 360 / cats.length;
@@ -861,6 +1081,13 @@ function applyActiveState(active, active2) {
     } else {
         hub2.style.display = 'none';
         secondBox.style.display = 'none';
+    }
+
+    const categoryChanged = active !== latestActiveCat || active2 !== latestActiveCat2;
+    latestActiveCat = active;
+    latestActiveCat2 = active2;
+    if (categoryChanged) {
+        refreshSubtaskArcs();
     }
 }
 
