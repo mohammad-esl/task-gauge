@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="subtasks.css">
+</head>
+<body>
+    <h4 id="page-title">SUBTASKS</h4>
+
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="list" onclick="switchTab('list')">LIST</button>
+        <button class="tab-btn" data-tab="gantt" onclick="switchTab('gantt')">GANTT</button>
+        <button class="tab-btn" data-tab="stats" onclick="switchTab('stats')">RANGE STATS</button>
+        <button class="tab-btn" data-tab="plan" onclick="switchTab('plan')">PLANNED VS ACTUAL</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-list">
+        <div id="sub-list"></div>
+        <button class="icon-btn" style="width:100%; margin-top:4px;" onclick="addSubRow()">+ ADD SUBTASK</button>
+    </div>
+
+    <div class="tab-panel" id="tab-gantt">
+        <div class="gantt-toolbar">
+            <div class="gantt-date" id="sub-gantt-date"></div>
+            <div style="display:flex; gap:6px;">
+                <button class="icon-btn" onclick="shiftSubGanttDay(-1)">← PREV</button>
+                <button class="icon-btn" onclick="shiftSubGanttDay(0)">TODAY</button>
+                <button class="icon-btn" onclick="shiftSubGanttDay(1)">NEXT →</button>
+            </div>
+        </div>
+        <div id="sub-gantt-chart" class="gantt-frame"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-stats">
+        <label class="field-label">از تاریخ</label>
+        <div class="stats-date-row">
+            <div>
+                <input type="text" id="sub-range-start" class="jalali-date-input" readonly placeholder="از تاریخ" onclick="openJalaliPicker('sub-range-start')">
+            </div>
+            <div>
+                <input type="text" id="sub-range-end" class="jalali-date-input" readonly placeholder="تا تاریخ" onclick="openJalaliPicker('sub-range-end')">
+            </div>
+        </div>
+        <button class="save-btn" onclick="loadSubRangeStats()">GET TOTAL</button>
+        <div id="sub-range-result" class="stats-result"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-plan">
+        <table class="plan-table" id="plan-table">
+            <thead><tr><th>Subtask</th><th>Status</th><th>Planned</th><th>Spent</th><th>Last activity</th></tr></thead>
+            <tbody id="plan-tbody"></tbody>
+        </table>
+    </div>
+
+    <div id="jalali-picker" class="jalali-picker">
+        <div class="jalali-picker-header">
+            <button type="button" onclick="jalaliPickerShiftMonth(-1)">‹</button>
+            <span id="jalali-picker-title"></span>
+            <button type="button" onclick="jalaliPickerShiftMonth(1)">›</button>
+        </div>
+        <div id="jalali-picker-weekdays" class="jalali-picker-weekdays"></div>
+        <div id="jalali-picker-grid" class="jalali-picker-grid"></div>
+    </div>
+
+    <script src="jalali.js"></script>
+    <script src="subtasks.js"></script>
+</body>
+</html>

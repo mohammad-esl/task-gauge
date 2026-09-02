@@ -165,6 +165,10 @@ function toggleSettings() {
                 renderTaskRows();
             });
             loadWeekChart();
+
+            const subtaskSelect = document.getElementById('subtask-window-category');
+            subtaskSelect.innerHTML = data.categories.filter(c => c !== 'Nothing')
+                .map(c => `<option value="${c}">${c}</option>`).join('');
         });
     }
     panel.style.display = isVisible ? 'none' : 'block';
@@ -730,6 +734,12 @@ document.addEventListener('keydown', e => {
         undoGanttEdit();
     }
 });
+
+function openSubtaskWindow() {
+    const category = document.getElementById('subtask-window-category').value;
+    if (!category) return;
+    window.pywebview.api.open_subtask_window(category);
+}
 
 function resetCurrent() {
     if(confirm("Reset current session?")) window.pywebview.api.reset_timer();
