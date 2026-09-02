@@ -11,7 +11,6 @@ def test_create_persists_to_disk(tmp_path):
     store = make_store(tmp_path)
     subtask = store.create("Work", "Login module")
     assert subtask["name"] == "Login module"
-    assert subtask["status"] == "todo"
     assert subtask["archived"] is False
 
     reloaded = make_store(tmp_path)

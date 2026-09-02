@@ -750,9 +750,9 @@ class TimerApi:
         return self.subtasks.create(category, name, planned_start=planned_start,
                                      planned_end=planned_end)
 
-    def update_subtask(self, subtask_id, name=None, status=None,
+    def update_subtask(self, subtask_id, name=None,
                         planned_start=None, planned_end=None, color=None):
-        return self.subtasks.update(subtask_id, name=name, status=status,
+        return self.subtasks.update(subtask_id, name=name,
                                      planned_start=planned_start,
                                      planned_end=planned_end, color=color)
 
@@ -860,7 +860,6 @@ class TimerApi:
         return [{
             "id": s["id"],
             "name": s["name"],
-            "status": s["status"],
             "planned_start": s.get("planned_start"),
             "planned_end": s.get("planned_end"),
             "spent": spent.get(s["id"], 0),

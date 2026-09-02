@@ -52,7 +52,6 @@ class SubtaskStore:
         subtask = {
             "id": uuid.uuid4().hex,
             "name": name,
-            "status": "todo",
             "planned_start": planned_start,
             "planned_end": planned_end,
             "order": order,

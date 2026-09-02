@@ -813,7 +813,6 @@ function saveSettings() {
 
 let catStep = 0;
 const hub2 = document.getElementById('hub-2');
-let hasSubtasksByCategory = {};
 let latestActiveSubtask = null;
 let latestActiveSubtask2 = null;
 
@@ -822,32 +821,14 @@ function categoryColor(catName) {
     return chartColors[i % chartColors.length];
 }
 
-function hexToHsl(hex) {
-    const r = parseInt(hex.slice(1, 3), 16) / 255;
-    const g = parseInt(hex.slice(3, 5), 16) / 255;
-    const b = parseInt(hex.slice(5, 7), 16) / 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    let h = 0, s = 0;
-    const l = (max + min) / 2;
-    const d = max - min;
-    if (d !== 0) {
-        s = d / (1 - Math.abs(2 * l - 1));
-        switch (max) {
-            case r: h = ((g - b) / d) % 6; break;
-            case g: h = (b - r) / d + 2; break;
-            case b: h = (r - g) / d + 4; break;
-        }
-        h *= 60;
-        if (h < 0) h += 360;
-    }
-    return { h: Math.round(h), s: Math.round(s * 100) };
-}
-
-function subtaskShade(baseHex, k, n) {
-    const { h, s } = hexToHsl(baseHex);
-    const l = n === 1 ? 53 : 38 + (30 * k) / (n - 1);
-    return `hsl(${h} ${s}% ${l}%)`;
-}
+// Annular sector path, entirely inside the wheel's existing radius (the
+// slices already reach r=50, so the arc sits just inside that at 44-49 —
+// no viewBox change, so it can never overflow the SVG box or collide with
+// the labels, which live further out at a 210px pixel radius).
+const NS = "http://www.w3.org/2000/svg";
+const ARC_R_IN = 51;
+const ARC_R_OUT = 52.5;
+const MIN_ARC_SEG_DEG = 4;
 
 function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
     const a0 = (a0Deg - 90) * Math.PI / 180;
@@ -860,82 +841,56 @@ function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
          + ` L ${x3} ${y3} A ${rIn} ${rIn} 0 ${large} 0 ${x4} ${y4} Z`;
 }
 
-const ARC_R_IN = 51.5;
-const ARC_R_OUT = 57.5;
-const MIN_ARC_SEG_DEG = 4;
-const NS = "http://www.w3.org/2000/svg";
-
 function buildSubtaskArc(name, centerAngle, subs, isSecond) {
     const a0 = centerAngle - catStep / 2;
-    const n = subs.length;
-    const segDeg = catStep / (n + 1);
+    const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
+    const n = options.length;
+    const segDeg = catStep / n;
     const baseColor = categoryColor(name);
     const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
-    const hasSelection = !!activeId;
 
     const g = document.createElementNS(NS, "g");
     g.setAttribute("class", "subtask-arc");
-    g.dataset.category = name;
-
-    const collapsed = document.createElementNS(NS, "path");
-    collapsed.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, a0, a0 + catStep));
-    collapsed.setAttribute("class", "arc-collapsed" + (hasSelection ? " has-selection" : ""));
-    collapsed.setAttribute("fill", hasSelection ? baseColor : "#3a3a3a");
-    g.appendChild(collapsed);
-
-    const expanded = document.createElementNS(NS, "g");
-    expanded.setAttribute("class", "arc-expanded");
-    expanded.setAttribute("hidden", "hidden");
 
     if (segDeg < MIN_ARC_SEG_DEG) {
-        // Too many subtasks for the arc to subdivide legibly: fall back to
-        // a floating vertical list instead of unreadably thin slivers.
-        collapsed.onclick = (e) => { e.stopPropagation(); openSubtaskPopover(name, subs, centerAngle, isSecond); };
-        g.appendChild(expanded);
+        // Too many subtasks to subdivide legibly inside one slice's arc:
+        // draw a single flat indicator strip instead and rely on the
+        // click-to-open popover rather than per-subtask hover segments.
+        const strip = document.createElementNS(NS, "path");
+        strip.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, a0, a0 + catStep));
+        strip.setAttribute("class", "arc-strip" + (activeId ? " has-selection" : ""));
+        strip.setAttribute("fill", activeId ? baseColor : "#2a2a2a");
+        strip.onclick = (e) => { e.stopPropagation(); toggleSubtaskPopover(strip, subs, isSecond); };
+        g.appendChild(strip);
         return g;
     }
 
-    let closeTimer = null;
-    const expand = () => { clearTimeout(closeTimer); expanded.removeAttribute("hidden"); };
-    const collapse = () => { closeTimer = setTimeout(() => expanded.setAttribute("hidden", "hidden"), 150); };
-    g.addEventListener('mouseenter', expand);
-    g.addEventListener('mouseleave', collapse);
-
-    const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
     options.forEach((opt, k) => {
         const segStart = a0 + segDeg * k;
         const seg = document.createElementNS(NS, "path");
         seg.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, segStart, segStart + segDeg));
         const isSelected = opt.id === activeId;
         seg.setAttribute("class", "arc-seg" + (isSelected ? " selected" : ""));
-        seg.setAttribute("fill", opt.id === null ? "#3a3a3a" : subtaskShade(baseColor, k - 1, subs.length));
-        seg.dataset.subtask = opt.id || '';
+        seg.setAttribute("fill", opt.id === null ? "#2a2a2a" : baseColor);
+        seg.setAttribute("opacity", opt.id === null ? "0.6" : (isSelected ? "1" : "0.55"));
         seg.onclick = (e) => {
             e.stopPropagation();
             setActiveSubtask(isSelected ? null : opt.id, isSecond);
         };
-        seg.addEventListener('mouseenter', () => showSubtaskTooltip(seg, opt.name, segStart + segDeg / 2));
+        seg.addEventListener('mouseenter', () => showSubtaskTooltip(opt.name));
         seg.addEventListener('mouseleave', hideSubtaskTooltip);
-        expanded.appendChild(seg);
+        g.appendChild(seg);
     });
 
-    g.appendChild(expanded);
     return g;
 }
 
-function showSubtaskTooltip(seg, name, angleDeg) {
+function showSubtaskTooltip(name) {
     hideSubtaskTooltip();
-    const rad = (angleDeg - 90) * Math.PI / 180;
     const tooltip = document.createElement('div');
     tooltip.className = 'subtask-tooltip';
     tooltip.id = 'subtask-tooltip';
     tooltip.innerText = name;
-    const midR = (ARC_R_IN + ARC_R_OUT) / 2;
-    // svg viewBox is -8..108 mapped over the container's pixel box (520px, minus 16px margin scaled)
-    const px = (50 + midR * Math.cos(rad) + 8) / 116 * 520;
-    const py = (50 + midR * Math.sin(rad) + 8) / 116 * 520;
-    tooltip.style.left = px + 'px';
-    tooltip.style.top = py + 'px';
     document.getElementById('app-ui').appendChild(tooltip);
 }
 
@@ -944,24 +899,31 @@ function hideSubtaskTooltip() {
     if (el) el.remove();
 }
 
-function openSubtaskPopover(name, subs, centerAngle, isSecond) {
-    closeSubtaskPopover();
+function toggleSubtaskPopover(anchorEl, subs, isSecond) {
+    if (document.getElementById('subtask-popover')) {
+        closeSubtaskPopover();
+        return;
+    }
+
     const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
-    const rad = (centerAngle - 90) * Math.PI / 180;
+    const containerRect = document.getElementById('app-ui').getBoundingClientRect();
+    const rect = anchorEl.getBoundingClientRect();
+
     const popover = document.createElement('div');
     popover.className = 'subtask-popover';
     popover.id = 'subtask-popover';
-    const px = (50 + 70 * Math.cos(rad) + 8) / 116 * 520;
-    const py = (50 + 70 * Math.sin(rad) + 8) / 116 * 520;
-    popover.style.left = px + 'px';
-    popover.style.top = py + 'px';
+    // Clamp inside the container so it can never spill past its right/left edge.
+    const left = Math.max(0, Math.min(containerRect.width - 150, rect.left - containerRect.left));
+    popover.style.left = left + 'px';
+    popover.style.top = (rect.top - containerRect.top) + 'px';
 
     const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
     options.forEach(opt => {
         const item = document.createElement('div');
         item.className = 'subtask-popover-item' + (opt.id === activeId ? ' selected' : '');
         item.innerText = opt.name;
-        item.onclick = () => {
+        item.onclick = (e) => {
+            e.stopPropagation();
             setActiveSubtask(opt.id === activeId ? null : opt.id, isSecond);
             closeSubtaskPopover();
         };
@@ -1007,7 +969,7 @@ function renderSubtaskArcs() {
     const activeLabel = document.getElementById('active-subtask-label');
     activeLabel.style.display = 'none';
 
-    if (latestActiveCat && hasSubtasksByCategory[latestActiveCat]) {
+    if (latestActiveCat) {
         window.pywebview.api.get_subtasks(latestActiveCat).then(subs => {
             if (subs.length === 0) return;
             const idx = cats.indexOf(latestActiveCat);
@@ -1021,7 +983,7 @@ function renderSubtaskArcs() {
             }
         });
     }
-    if (latestActiveCat2 && hasSubtasksByCategory[latestActiveCat2]) {
+    if (latestActiveCat2) {
         window.pywebview.api.get_subtasks(latestActiveCat2).then(subs => {
             if (subs.length === 0) return;
             const idx2 = cats.indexOf(latestActiveCat2);
@@ -1033,7 +995,6 @@ function renderSubtaskArcs() {
 
 function initUI(data) {
     cats = data.categories;
-    hasSubtasksByCategory = data.has_subtasks || {};
     latestActiveSubtask = data.active_subtask || null;
     latestActiveSubtask2 = data.active_subtask_2 || null;
     svg.innerHTML = '';

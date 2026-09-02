@@ -2,7 +2,7 @@ const params = new URLSearchParams(window.location.search);
 const category = params.get('category') || '';
 document.getElementById('page-title').innerText = 'SUBTASKS — ' + category;
 
-let subRows = [];          // working copy of {id, name, status, planned_start, planned_end}
+let subRows = [];          // working copy of {id, name, planned_start, planned_end}
 let subGanttOffset = 0;
 
 function localDateString(date) {
@@ -58,16 +58,6 @@ function renderSubRows() {
         nameInput.value = s.name;
         nameInput.onchange = () => saveSubField(s.id, 'name', nameInput.value);
 
-        const statusSelect = document.createElement('select');
-        ['todo', 'doing', 'done'].forEach(st => {
-            const opt = document.createElement('option');
-            opt.value = st;
-            opt.innerText = st.toUpperCase();
-            opt.selected = s.status === st;
-            statusSelect.appendChild(opt);
-        });
-        statusSelect.onchange = () => saveSubField(s.id, 'status', statusSelect.value);
-
         const startInput = document.createElement('input');
         startInput.type = 'text';
         startInput.className = 'date-field';
@@ -105,7 +95,6 @@ function renderSubRows() {
         archiveBtn.onclick = () => archiveSubRow(s.id);
 
         row.appendChild(nameInput);
-        row.appendChild(statusSelect);
         row.appendChild(startInput);
         row.appendChild(endInput);
         row.appendChild(upBtn);
@@ -116,9 +105,9 @@ function renderSubRows() {
 }
 
 function saveSubField(id, field, value) {
-    const args = { id: null, name: null, status: null, planned_start: null, planned_end: null, color: null };
+    const args = { id: null, name: null, planned_start: null, planned_end: null, color: null };
     args[field] = value;
-    window.pywebview.api.update_subtask(id, args.name, args.status, args.planned_start, args.planned_end, args.color)
+    window.pywebview.api.update_subtask(id, args.name, args.planned_start, args.planned_end, args.color)
         .then(() => loadSubList());
 }
 
@@ -266,7 +255,6 @@ function loadPlanTable() {
         tbody.innerHTML = rows.map(r => `
             <tr>
                 <td>${r.name}</td>
-                <td class="status-${r.status}">${r.status.toUpperCase()}</td>
                 <td>${r.planned_start ? gregorianStrToJalaliStr(r.planned_start) : '—'} → ${r.planned_end ? gregorianStrToJalaliStr(r.planned_end) : '—'}</td>
                 <td>${secondsToLabel(r.spent)}</td>
                 <td>${r.last_activity || '—'}</td>
