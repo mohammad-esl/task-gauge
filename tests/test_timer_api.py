@@ -521,3 +521,115 @@ def test_gantt_edits_are_recorded_in_edit_log(tmp_path):
     actions = [e["action"] for e in entries]
     assert actions == ["create", "delete"]
     assert entries[0]["session_id"] == created["id"]
+
+
+def test_session_without_subtask_selection_has_no_subtask_id_key(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    api.data["totals"]["Work"] = 0
+    api.set_category("Work")
+    api.start_time = time.time() - 30
+
+    api._finalize_active_session(time.time())
+    sessions = [s for s in api.sessions.load() if s["category"] == "Work"]
+    assert len(sessions) == 1
+    assert "subtask_id" not in sessions[0]
+
+
+def test_subtask_selection_resets_on_category_change(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_category("Work")
+    sub = api.create_subtask("Work", "Login module")
+
+    result = api.set_active_subtask(sub["id"])
+    assert result["status"] == "ok"
+    assert api.active_subtask == sub["id"]
+
+    api.set_category("Study")
+    assert api.active_subtask is None
+
+    api.set_category("Work")  # returning to Work does not restore selection
+    assert api.active_subtask is None
+
+    api.start_time = time.time() - 10
+    api._finalize_active_session(time.time())
+    sessions = [s for s in api.sessions.load() if s["category"] == "Work"]
+    assert all("subtask_id" not in s for s in sessions)
+
+
+def test_switching_subtask_mid_session_does_not_lose_time(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    api.data["totals"]["Work"] = 0
+    api.set_category("Work")
+    sub_a = api.create_subtask("Work", "A")
+    sub_b = api.create_subtask("Work", "B")
+
+    t0 = time.time() - 40
+    api.start_time = t0                          # unlabeled segment starts here
+    switch_1 = t0 + 15
+    api._finalize_active_session(switch_1)       # ends unlabeled segment, start_time -> switch_1
+    api.active_subtask = sub_a["id"]
+
+    switch_2 = switch_1 + 10
+    api._finalize_active_session(switch_2)        # ends subtask-A segment
+    api.active_subtask = sub_b["id"]
+
+    end = switch_2 + 5
+    api._finalize_active_session(end)             # ends subtask-B segment
+
+    total_duration = sum(
+        s["duration"] for s in api.sessions.load() if s["category"] == "Work"
+    )
+    elapsed = int(end - t0)
+    assert abs(total_duration - elapsed) <= 1
+
+
+def test_set_active_subtask_rejects_other_categorys_subtask(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_category("Work")
+    foreign = api.create_subtask("Study", "Chapter 1")
+
+    result = api.set_active_subtask(foreign["id"])
+    assert result == {"status": "invalid"}
+    assert api.active_subtask is None
+
+
+def test_set_session_subtask_does_not_change_stats(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    session_id = api.sessions.append({
+        "date": "2026-08-06", "category": "Work",
+        "start": "2026-08-06 10:00:00", "end": "2026-08-06 11:00:00", "duration": 3600,
+    })
+    api._resync_day("2026-08-06")
+    sub = api.create_subtask("Work", "Login module")
+
+    before_week = api.get_week_report(0)
+    before_range = api.get_range_report("2026-08-01", "2026-08-31")
+
+    updated = api.set_session_subtask(session_id, sub["id"])
+    assert updated["subtask_id"] == sub["id"]
+
+    after_week = api.get_week_report(0)
+    after_range = api.get_range_report("2026-08-01", "2026-08-31")
+    assert after_week == before_week
+    assert after_range == before_range
+
+
+def test_second_track_subtask_switch_keeps_track_running(tmp_path):
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].extend(["Work", "Study"])
+    api.set_category("Work")
+    api.set_category("Study", as_second=True)
+    sub = api.create_subtask("Study", "Chapter 1")
+
+    api.start_time_2 = time.time() - 15
+    result = api.set_active_subtask(sub["id"], as_second=True)
+
+    assert result == {"status": "ok", "active_subtask": sub["id"]}
+    assert api.active_cat_2 == "Study"        # second track still running
+    assert api.active_subtask == None         # first track untouched
+    assert api.active_subtask_2 == sub["id"]

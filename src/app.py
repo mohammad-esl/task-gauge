@@ -36,7 +36,7 @@ def main():
         sys.exit(0)
 
     try:
-        api = TimerApi(DATA_DIR)
+        api = TimerApi(DATA_DIR, static_dir=STATIC_DIR)
         window = webview.create_window(
             'Task Gauge Pro',
             url=os.path.join(STATIC_DIR, "index.html"),
