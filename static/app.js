@@ -826,8 +826,8 @@ function categoryColor(catName) {
 // no viewBox change, so it can never overflow the SVG box or collide with
 // the labels, which live further out at a 210px pixel radius).
 const NS = "http://www.w3.org/2000/svg";
-const ARC_R_IN = 51;
-const ARC_R_OUT = 52.5;
+const ARC_R_IN = 44;
+const ARC_R_OUT = 49.5;
 const MIN_ARC_SEG_DEG = 4;
 
 function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
