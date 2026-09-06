@@ -1,6 +1,7 @@
 import json
 import time
 
+import time_utils
 from timer_api import TimerApi
 
 
@@ -595,6 +596,25 @@ def test_set_active_subtask_rejects_other_categorys_subtask(tmp_path):
     result = api.set_active_subtask(foreign["id"])
     assert result == {"status": "invalid"}
     assert api.active_subtask is None
+
+
+def test_set_active_subtask_persists_time_to_daily_report(tmp_path):
+    """Regression: set_active_subtask finalized the current segment into
+    data["totals"] but never called save_config/_save_daily_report, so
+    daily_report.csv (what the week/bar chart reads) went stale and the
+    chart showed zero-length bars for time actually being tracked."""
+    api = TimerApi(str(tmp_path))
+    api.data["categories"].append("Work")
+    api.data["totals"]["Work"] = 0
+    api.set_category("Work")
+    sub = api.create_subtask("Work", "Login module")
+
+    api.start_time = time.time() - 30
+    api.set_active_subtask(sub["id"])
+
+    rows, _ = api.report.load(api.data["categories"])
+    today = time_utils.current_logical_date_str()
+    assert time_utils.parse_hms(rows[today]["Work"]) >= 30
 
 
 def test_set_session_subtask_does_not_change_stats(tmp_path):

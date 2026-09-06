@@ -785,6 +785,10 @@ class TimerApi:
             self._finalize_active_session(now)
             self.active_subtask = subtask_id
 
+        self.save_config()
+        self._save_daily_report(time_utils.current_logical_date_str())
+        self.last_report_save = time.time()
+
         return {"status": "ok", "active_subtask": subtask_id}
 
     def get_active_subtask(self):
