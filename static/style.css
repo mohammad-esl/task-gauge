@@ -1,7 +1,7 @@
 :root { --bg: #0a0a0a; --accent: #00e5ff; --ring: #161616; --red: #ff4b2b; }
 body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif;
        display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; }
-.main-container { position: relative; width: 520px; height: 520px; transition: filter 0.3s; }
+.main-container { position: relative; width: 593px; height: 593px; transition: filter 0.3s; }
 .blur { filter: blur(15px); pointer-events: none; }
 #hit-surface { position: absolute; width: 100%; height: 100%; z-index: 5; }
 .slice { fill: var(--ring); stroke: #222; stroke-width: 1; cursor: pointer; transition: fill 0.2s; }

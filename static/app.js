@@ -826,8 +826,8 @@ function categoryColor(catName) {
 // no viewBox change, so it can never overflow the SVG box or collide with
 // the labels, which live further out at a 210px pixel radius).
 const NS = "http://www.w3.org/2000/svg";
-const ARC_R_IN = 44;
-const ARC_R_OUT = 49.5;
+const ARC_R_IN = 50.7;
+const ARC_R_OUT = 55.3;
 const MIN_ARC_SEG_DEG = 4;
 
 // Grows/shrinks a subtask arc segment along the radius direction only
@@ -890,7 +890,7 @@ function buildSubtaskArc(name, centerAngle, subs, isSecond, rIn, rOut) {
         return g;
     }
 
-    const HOVER_R_OUT = rOut + 2.5;
+    const HOVER_R_OUT = rOut + 1.2;
 
     options.forEach((opt, k) => {
         const segStart = a0 + segDeg * k;
@@ -1055,8 +1055,8 @@ function initUI(data) {
         label.id = 'lbl-' + name;
         label.innerText = name;
         const rad = (centerAngle - 90) * (Math.PI / 180);
-        label.style.left = (260 + 210 * Math.cos(rad) - 55) + 'px';
-        label.style.top = (260 + 210 * Math.sin(rad) - 10) + 'px';
+        label.style.left = (296.5 + 210 * Math.cos(rad) - 55) + 'px';
+        label.style.top = (296.5 + 210 * Math.sin(rad) - 10) + 'px';
         document.getElementById('app-ui').appendChild(label);
     });
     applyActiveState(data.active, data.active_2);
