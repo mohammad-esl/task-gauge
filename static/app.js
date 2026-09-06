@@ -826,9 +826,32 @@ function categoryColor(catName) {
 // no viewBox change, so it can never overflow the SVG box or collide with
 // the labels, which live further out at a 210px pixel radius).
 const NS = "http://www.w3.org/2000/svg";
-const ARC_R_IN = 51;
-const ARC_R_OUT = 52.5;
+const ARC_R_IN = 50.7;
+const ARC_R_OUT = 55.3;
 const MIN_ARC_SEG_DEG = 4;
+
+// Grows/shrinks a subtask arc segment along the radius direction only
+// (rOut animates, rIn and the angular span stay fixed) so hover reads as
+// the segment lifting outward, not a uniform scale that would distort it.
+const arcAnimations = new WeakMap();
+function animateArcRadius(pathEl, rIn, fromROut, toROut, a0Deg, a1Deg, durationMs) {
+    const prev = arcAnimations.get(pathEl);
+    if (prev) cancelAnimationFrame(prev);
+
+    const start = performance.now();
+    function step(now) {
+        const t = Math.min(1, (now - start) / durationMs);
+        const eased = 1 - Math.pow(1 - t, 2);
+        const rOut = fromROut + (toROut - fromROut) * eased;
+        pathEl.setAttribute("d", annularArc(50, 50, rIn, rOut, a0Deg, a1Deg));
+        if (t < 1) {
+            arcAnimations.set(pathEl, requestAnimationFrame(step));
+        } else {
+            arcAnimations.delete(pathEl);
+        }
+    }
+    arcAnimations.set(pathEl, requestAnimationFrame(step));
+}
 
 function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
     const a0 = (a0Deg - 90) * Math.PI / 180;
@@ -841,13 +864,15 @@ function annularArc(cx, cy, rIn, rOut, a0Deg, a1Deg) {
          + ` L ${x3} ${y3} A ${rIn} ${rIn} 0 ${large} 0 ${x4} ${y4} Z`;
 }
 
-function buildSubtaskArc(name, centerAngle, subs, isSecond) {
+function buildSubtaskArc(name, centerAngle, subs, isSecond, rIn, rOut) {
     const a0 = centerAngle - catStep / 2;
     const options = [{ id: null, name: 'بدون زیرتسک' }, ...subs];
     const n = options.length;
     const segDeg = catStep / n;
     const baseColor = categoryColor(name);
     const activeId = isSecond ? latestActiveSubtask2 : latestActiveSubtask;
+    rIn = rIn ?? ARC_R_IN;
+    rOut = rOut ?? ARC_R_OUT;
 
     const g = document.createElementNS(NS, "g");
     g.setAttribute("class", "subtask-arc");
@@ -857,7 +882,7 @@ function buildSubtaskArc(name, centerAngle, subs, isSecond) {
         // draw a single flat indicator strip instead and rely on the
         // click-to-open popover rather than per-subtask hover segments.
         const strip = document.createElementNS(NS, "path");
-        strip.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, a0, a0 + catStep));
+        strip.setAttribute("d", annularArc(50, 50, rIn, rOut, a0, a0 + catStep));
         strip.setAttribute("class", "arc-strip" + (activeId ? " has-selection" : ""));
         strip.setAttribute("fill", activeId ? baseColor : "#2a2a2a");
         strip.onclick = (e) => { e.stopPropagation(); toggleSubtaskPopover(strip, subs, isSecond); };
@@ -865,10 +890,12 @@ function buildSubtaskArc(name, centerAngle, subs, isSecond) {
         return g;
     }
 
+    const HOVER_R_OUT = rOut + 1.2;
+
     options.forEach((opt, k) => {
         const segStart = a0 + segDeg * k;
         const seg = document.createElementNS(NS, "path");
-        seg.setAttribute("d", annularArc(50, 50, ARC_R_IN, ARC_R_OUT, segStart, segStart + segDeg));
+        seg.setAttribute("d", annularArc(50, 50, rIn, rOut, segStart, segStart + segDeg));
         const isSelected = opt.id === activeId;
         seg.setAttribute("class", "arc-seg" + (isSelected ? " selected" : ""));
         seg.setAttribute("fill", opt.id === null ? "#2a2a2a" : baseColor);
@@ -877,8 +904,14 @@ function buildSubtaskArc(name, centerAngle, subs, isSecond) {
             e.stopPropagation();
             setActiveSubtask(isSelected ? null : opt.id, isSecond);
         };
-        seg.addEventListener('mouseenter', () => showSubtaskTooltip(opt.name));
-        seg.addEventListener('mouseleave', hideSubtaskTooltip);
+        seg.addEventListener('mouseenter', () => {
+            animateArcRadius(seg, rIn, rOut, HOVER_R_OUT, segStart, segStart + segDeg, 120);
+            showSubtaskTooltip(opt.name);
+        });
+        seg.addEventListener('mouseleave', () => {
+            animateArcRadius(seg, rIn, HOVER_R_OUT, rOut, segStart, segStart + segDeg, 120);
+            hideSubtaskTooltip();
+        });
         g.appendChild(seg);
     });
 
@@ -969,11 +1002,17 @@ function renderSubtaskArcs() {
     const activeLabel = document.getElementById('active-subtask-label');
     activeLabel.style.display = 'none';
 
+    const sameCategory = !!latestActiveCat && latestActiveCat === latestActiveCat2;
+
     if (latestActiveCat) {
         window.pywebview.api.get_subtasks(latestActiveCat).then(subs => {
             if (subs.length === 0) return;
             const idx = cats.indexOf(latestActiveCat);
-            const g = buildSubtaskArc(latestActiveCat, idx * catStep, subs, false);
+            // Both tracks on the same category: split the ring into two
+            // thinner concentric rings instead of drawing two overlapping
+            // full-thickness arcs at identical geometry.
+            const rOut = sameCategory ? (ARC_R_IN + ARC_R_OUT) / 2 : ARC_R_OUT;
+            const g = buildSubtaskArc(latestActiveCat, idx * catStep, subs, false, ARC_R_IN, rOut);
             svg.appendChild(g);
 
             const active = subs.find(s => s.id === latestActiveSubtask);
@@ -987,7 +1026,9 @@ function renderSubtaskArcs() {
         window.pywebview.api.get_subtasks(latestActiveCat2).then(subs => {
             if (subs.length === 0) return;
             const idx2 = cats.indexOf(latestActiveCat2);
-            const g = buildSubtaskArc(latestActiveCat2, idx2 * catStep, subs, true);
+            const rIn = sameCategory ? (ARC_R_IN + ARC_R_OUT) / 2 : ARC_R_IN;
+            const rOut = ARC_R_OUT;
+            const g = buildSubtaskArc(latestActiveCat2, idx2 * catStep, subs, true, rIn, rOut);
             svg.appendChild(g);
         });
     }
@@ -1014,8 +1055,8 @@ function initUI(data) {
         label.id = 'lbl-' + name;
         label.innerText = name;
         const rad = (centerAngle - 90) * (Math.PI / 180);
-        label.style.left = (260 + 210 * Math.cos(rad) - 55) + 'px';
-        label.style.top = (260 + 210 * Math.sin(rad) - 10) + 'px';
+        label.style.left = (296.5 + 210 * Math.cos(rad) - 55) + 'px';
+        label.style.top = (296.5 + 210 * Math.sin(rad) - 10) + 'px';
         document.getElementById('app-ui').appendChild(label);
     });
     applyActiveState(data.active, data.active_2);
